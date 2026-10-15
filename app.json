@@ -8,11 +8,6 @@
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.anoldking.lotto"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "auto"
-      }
     }
   }
 }
