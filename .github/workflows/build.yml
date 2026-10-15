@@ -21,6 +21,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: 누락된 기본 이미지(assets) 자동 생성
+        run: |
+          mkdir -p assets
+          # 1x1 투명 png 기본 파일 생성 (아이콘 누락 방지)
+          echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > assets/icon.png
+          cp assets/icon.png assets/adaptive-icon.png
+          cp assets/icon.png assets/splash-icon.png
+          cp assets/icon.png assets/favicon.png
+
       - name: 의존성 패키지 설치
         run: npm install
 
