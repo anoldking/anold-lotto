@@ -21,9 +21,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Configure EAS Project
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas init --id "" --force || npx eas-cli project:init --force || true
+
       - name: Build APK on EAS
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          npx eas-cli project:init --force || true
-          eas build --platform android --profile preview --non-interactive
+        run: eas build --platform android --profile preview --non-interactive
