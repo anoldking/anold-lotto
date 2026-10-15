@@ -21,9 +21,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Android SDK 설정
-        uses: android-actions/setup-android@v3
-
       - name: 의존성 패키지 설치
         run: npm install
 
