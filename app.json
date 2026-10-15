@@ -1,29 +1,18 @@
 {
   "expo": {
-    "name": "anold-lotto",
-    "slug": "snack-4b82d97a-be38-455b-b112-c3ab9bcd83fb",
+    "name": "Anold의 로또 6/45",
+    "slug": "anold-lotto",
     "version": "1.0.0",
+    "owner": "anoldking",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
-    "ios": {
-      "supportsTablet": true
-    },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      "package": "com.anoldking.lotto"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
+    "extra": {
+      "eas": {
+        "projectId": "auto"
+      }
     }
   }
 }
