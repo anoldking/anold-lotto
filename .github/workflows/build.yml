@@ -7,23 +7,40 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Node.js 설정
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
+          cache: 'npm'
 
-      - name: Install EAS CLI
-        run: npm install -g eas-cli
+      - name: Java 17 설정
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Install dependencies
+      - name: Android SDK 설정
+        uses: android-actions/setup-android@v3
+
+      - name: 의존성 패키지 설치
         run: npm install
 
-      - name: Build APK on EAS
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      - name: Expo Prebuild (네이티브 Android 프로젝트 생성)
+        run: npx expo prebuild --platform android --clean
+
+      - name: Gradle 권한 부여
+        run: chmod +x android/gradlew
+
+      - name: Release APK 빌드
         run: |
-          npx eas-cli credentials -p android --generate-keystore || true
-          eas build --platform android --profile preview --non-interactive
+          cd android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: APK 추출 및 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
