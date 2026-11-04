@@ -1,0 +1,49 @@
+name: Build Android APK (Local Gradle on GitHub)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 2. Node.js 환경 세팅
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 3. Java(JDK 17) 환경 세팅
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 4. Android SDK 세팅
+        uses: android-actions/setup-android@v3
+
+      - name: 5. 의존성 패키지 설치
+        run: npm ci
+
+      - name: 6. Expo Prebuild (네이티브 android 폴더 생성)
+        run: npx expo prebuild --platform android --clean
+
+      - name: 7. Gradle 빌드 권한 부여 및 Release APK 빌드
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: 8. 빌드된 APK 파일 업로드 (다운로드 제공)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
