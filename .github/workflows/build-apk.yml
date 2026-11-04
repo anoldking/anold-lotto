@@ -33,16 +33,12 @@ jobs:
 
       - name: 5. Expo Prebuild (네이티브 android 폴더 생성)
         run: |
-          npx expo prebuild --platform android --clean --no-install
-
-      - name: 6. 오프라인 번들 진입점 보정 및 자바스크립트 번들링
-        run: |
-          # 1) index.js가 없으면 자동 생성
+          # index.js가 없으면 자동 생성 보정
           if [ ! -f index.js ]; then
             echo "import { registerRootComponent } from 'expo'; import App from './App'; registerRootComponent(App);" > index.js
           fi
 
-          # 2) assets 디렉터리 및 필수 파일 자동 보정
+          # 에셋 폴더 기본 보정
           mkdir -p assets
           if [ -f main_bg.png ] && [ ! -f assets/main_bg.png ]; then
             cp main_bg.png assets/main_bg.png
@@ -54,22 +50,15 @@ jobs:
             echo '{"returnValue":"fail"}' > assets/latest.json
           fi
 
-          # 3) Android assets 폴더 생성 및 오프라인 번들링
-          mkdir -p android/app/src/main/assets
-          npx react-native bundle \
-            --platform android \
-            --dev false \
-            --entry-file index.js \
-            --bundle-output android/app/src/main/assets/index.android.bundle \
-            --assets-dest android/app/src/main/res
+          npx expo prebuild --platform android --clean --no-install
 
-      - name: 7. Gradle 빌드 및 APK 생성
+      - name: 6. Gradle 오프라인 번들 포함 APK 빌드
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon -x lint -x test
+          ./gradlew assembleDebug -PbundleInDebug=true --no-daemon -x lint -x test
 
-      - name: 8. 빌드된 APK 파일 업로드 (다운로드 제공)
+      - name: 7. 빌드된 APK 파일 업로드 (다운로드 제공)
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
