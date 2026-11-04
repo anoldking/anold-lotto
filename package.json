@@ -1,6 +1,6 @@
 {
-  "license": "0BSD",
-  "main": "index.js",
+  "name": "kims-lotto",
+  "version": "1.0.0",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
@@ -8,14 +8,21 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "expo": "~55.0.31",
-    "expo-status-bar": "~55.0.6",
-    "react": "19.2.0",
-    "react-native": "0.83.10",
-    "react-native-paper": "4.9.2",
-    "@expo/vector-icons": "^15.0.2",
-    "expo-camera": "~55.0.23",
-    "@react-native-async-storage/async-storage": "2.2.0"
+    "@react-native-async-storage/async-storage": "1.23.1",
+    "expo": "~51.0.38",
+    "expo-camera": "~15.0.16",
+    "expo-file-system": "~17.0.1",
+    "expo-print": "~13.0.1",
+    "expo-sharing": "~12.0.1",
+    "expo-status-bar": "~1.12.1",
+    "react": "18.2.0",
+    "react-native": "0.74.5"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "overrides": {
+    "expo-font": "12.0.5"
   },
   "private": true
 }

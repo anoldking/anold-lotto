@@ -1,13 +1,39 @@
 {
   "expo": {
-    "name": "Anold의 로또 6/45",
-    "slug": "anold-lotto",
+    "name": "Kims LoTTo",
+    "slug": "kims-lotto",
     "version": "1.0.0",
-    "owner": "anoldking",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
     "android": {
-      "package": "com.anoldking.lotto"
+      "package": "com.anoldking.kimslotto",
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "로또 QR코드를 스캔하기 위해 카메라 권한이 필요합니다."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "b69a781d-0eb4-423c-9cfa-789bd5615bdf"
+      }
     }
   }
 }
