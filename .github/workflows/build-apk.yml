@@ -35,8 +35,26 @@ jobs:
         run: |
           npx expo prebuild --platform android --clean --no-install
 
-      - name: 6. 오프라인 자바스크립트 번들 생성 및 에셋 패키징
+      - name: 6. 오프라인 번들 진입점 보정 및 자바스크립트 번들링
         run: |
+          # 1) index.js가 없으면 자동 생성
+          if [ ! -f index.js ]; then
+            echo "import { registerRootComponent } from 'expo'; import App from './App'; registerRootComponent(App);" > index.js
+          fi
+
+          # 2) assets 디렉터리 및 필수 파일 자동 보정
+          mkdir -p assets
+          if [ -f main_bg.png ] && [ ! -f assets/main_bg.png ]; then
+            cp main_bg.png assets/main_bg.png
+          fi
+          if [ ! -f assets/history.min.json ]; then
+            echo "[]" > assets/history.min.json
+          fi
+          if [ ! -f assets/latest.json ]; then
+            echo '{"returnValue":"fail"}' > assets/latest.json
+          fi
+
+          # 3) Android assets 폴더 생성 및 오프라인 번들링
           mkdir -p android/app/src/main/assets
           npx react-native bundle \
             --platform android \
