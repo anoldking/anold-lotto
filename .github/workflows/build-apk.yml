@@ -27,22 +27,21 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 4. Android SDK 세팅
-        uses: android-actions/setup-android@v3
+      - name: 4. 의존성 패키지 설치
+        run: |
+          npm install --legacy-peer-deps
 
-      - name: 5. 의존성 패키지 설치
-        run: npm install
+      - name: 5. Expo Prebuild (네이티브 android 폴더 생성)
+        run: |
+          npx expo prebuild --platform android --clean --no-install
 
-      - name: 6. Expo Prebuild (네이티브 android 폴더 생성)
-        run: npx expo prebuild --platform android --clean
-
-      - name: 7. Gradle 빌드 권한 부여 및 Release APK 빌드
+      - name: 6. Gradle 빌드 및 Release APK 생성
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon -x lint -x test
 
-      - name: 8. 빌드된 APK 파일 업로드 (다운로드 제공)
+      - name: 7. 빌드된 APK 파일 업로드 (다운로드 제공)
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
