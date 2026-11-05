@@ -30,7 +30,6 @@ import LOCAL_LATEST_DATA from './assets/latest.json';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// 팝업창 크기 확장 (더 넓고 시원한 뷰 제공)
 const POPUP_WIDTH = Math.min(SCREEN_WIDTH * 0.96, 420);
 const BALL_GAP = 6;
 const BALL_SIZE = Math.floor((POPUP_WIDTH - 28 - BALL_GAP * 6) / 7);
@@ -79,7 +78,7 @@ const getBallColor = (number) => {
   return '#22c55e';
 };
 
-// 고정수(fixedNumbers) 및 제외수(excludedNumbers)를 모두 반영한 번호 생성기
+// 고정수 및 제외수를 모두 반영한 번호 생성기
 const generateBasicLottoSet = (excludedNumbers = [], fixedNumbers = []) => {
   const selected = new Set(fixedNumbers);
   const pool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
@@ -97,7 +96,7 @@ const generateBasicLottoSet = (excludedNumbers = [], fixedNumbers = []) => {
 };
 
 // =================================================================
-// 통계 정밀 필터링 유틸 (총합 / 홀짝 / 연속쌍 / 끝수 / AC값)
+// 통계 정밀 필터링 유틸 (총합 / 홀짝 / 연속쌍 / 끝수 / AC값 / 2연속 이월수 제외)
 // =================================================================
 
 const isValidConsecutiveFilter = (sorted) => {
@@ -134,7 +133,13 @@ const calculateACValue = (sorted) => {
   return diffs.size - (sorted.length - 1);
 };
 
-const isStrictStatisticallyValid = (numbers) => {
+// 직전회차와 2주전 회차에 '연속 2회 출현'했던 번호가 포함되어 있는지 검증하는 필터
+const hasDoubleConsecutiveCarryOver = (candidate, doubleCarryOverNumbers = []) => {
+  if (!doubleCarryOverNumbers || doubleCarryOverNumbers.length === 0) return false;
+  return candidate.some((n) => doubleCarryOverNumbers.includes(n));
+};
+
+const isStrictStatisticallyValid = (numbers, doubleCarryOverNumbers = []) => {
   const sum = numbers.reduce((acc, cur) => acc + cur, 0);
   if (sum < 115 || sum >= 180) return false;
 
@@ -144,6 +149,9 @@ const isStrictStatisticallyValid = (numbers) => {
   if (!isValidConsecutiveFilter(numbers)) return false;
   if (!isValidLastDigitFilter(numbers)) return false;
   if (calculateACValue(numbers) <= 6) return false;
+
+  // 연속 2회 이상 이월수 제외 필터 적용
+  if (hasDoubleConsecutiveCarryOver(numbers, doubleCarryOverNumbers)) return false;
 
   return true;
 };
@@ -199,13 +207,13 @@ export default function App() {
 
   // 제외수 및 고정수 상태
   const [excludedNumbers, setExcludedNumbers] = useState([]);
-  const [fixedNumbers, setFixedNumbers] = useState([]); // 고정수 (최대 5개)
+  const [fixedNumbers, setFixedNumbers] = useState([]);
   const [filterModalTab, setFilterModalTab] = useState('EXCLUDE'); // 'EXCLUDE' 또는 'FIXED'
 
   const [includeBonusInExclude, setIncludeBonusInExclude] = useState(false);
   const [excludeAnalysisRounds, setExcludeAnalysisRounds] = useState(10);
 
-  // 고정수 프리셋 필터 상태 (활성화된 필터 키 및 매칭 번호 목록)
+  // 고정수 프리셋 필터 상태
   const [selectedFixedPresetKey, setSelectedFixedPresetKey] = useState(null);
   const [presetFixedMatchedNumbers, setPresetFixedMatchedNumbers] = useState([]);
 
@@ -375,6 +383,27 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
+  // 최근 3주간(직전, 2주전, 3주전) 당첨 데이터 및 2연속 이월수 계산
+  const getRecent3WeeksCarryOverData = useCallback(() => {
+    const round1 = getLottoNumbersByRound(latestRound);
+    const round2 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1) : null;
+    const round3 = latestRound > 2 ? getLottoNumbersByRound(latestRound - 2) : null;
+
+    const list1 = round1 && !round1.isPending ? round1.numbers : [];
+    const list2 = round2 && !round2.isPending ? round2.numbers : [];
+    const list3 = round3 && !round3.isPending ? round3.numbers : [];
+
+    // 직전 회차와 2주전 회차에 동시에 출현한 연속 2회 이상 이월수
+    const doubleCarryOver = list1.filter((n) => list2.includes(n));
+
+    return {
+      round1Numbers: list1,
+      round2Numbers: list2,
+      round3Numbers: list3,
+      doubleCarryOver,
+    };
+  }, [latestRound, getLottoNumbersByRound]);
+
   const hasRank4AtLeastOnce = useCallback(
     (candidateNumbers) => {
       const candSet = new Set(candidateNumbers);
@@ -393,16 +422,18 @@ export default function App() {
     [latestRound, getLottoNumbersByRound]
   );
 
-  // 고정수 및 제외수를 함께 충족하는 통계 필터 생성기
+  // 통계 정밀 필터 (연속 2회 이상 이월수 제외 로직 추가)
   const generateStrictFilteredSet = useCallback(
     (excluded = [], fixed = []) => {
+      const { doubleCarryOver } = getRecent3WeeksCarryOverData();
+
       let attempts = 0;
       while (attempts < 5000) {
         attempts++;
         const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
 
-        if (isStrictStatisticallyValid(candidate)) {
+        if (isStrictStatisticallyValid(candidate, doubleCarryOver)) {
           if (hasRank4AtLeastOnce(candidate)) {
             return candidate;
           }
@@ -414,16 +445,15 @@ export default function App() {
         attempts++;
         const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
-        if (isStrictStatisticallyValid(candidate)) {
+        if (isStrictStatisticallyValid(candidate, doubleCarryOver)) {
           return candidate;
         }
       }
       return generateBasicLottoSet(excluded, fixed);
     },
-    [hasRank4AtLeastOnce]
+    [getRecent3WeeksCarryOverData, hasRank4AtLeastOnce]
   );
 
-  // ================= [특정 출현 횟수 번호 추출 유틸] =================
   const getExactFrequencyNumbers = useCallback(
     (roundCount, targetCount) => {
       const counts = {};
@@ -459,7 +489,6 @@ export default function App() {
     }
   };
 
-  // ================= [공용 9가지 정밀 분석 데이터 생성기 + 용지 패턴] =================
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -546,9 +575,8 @@ export default function App() {
 
       const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 3);
 
-      // 용지 마킹 패턴 계산 (가로줄: 7행, 세로줄: 7열)
-      const rowCounts = [0, 0, 0, 0, 0, 0, 0]; // 1~7, 8~14, 15~21, 22~28, 29~35, 36~42, 43~45
-      const colCounts = [0, 0, 0, 0, 0, 0, 0]; // 1열(1,8...), 2열(2,9...) ... 7열(7,14...)
+      const rowCounts = [0, 0, 0, 0, 0, 0, 0];
+      const colCounts = [0, 0, 0, 0, 0, 0, 0];
 
       nums.forEach((n) => {
         const rIdx = Math.floor((n - 1) / 7);
@@ -579,7 +607,6 @@ export default function App() {
         recent30Counts,
         absenceWeeks,
         topPairs,
-        // 용지 패턴 지표
         rowCounts,
         colCounts,
         deadRowCount,
@@ -589,7 +616,6 @@ export default function App() {
     [latestRound, getLottoNumbersByRound]
   );
 
-  // 저장된 번호 전체를 1차원 목록으로 평탄화
   const getFlatSavedGames = useCallback(() => {
     const flat = [];
     savedSets.forEach((item) => {
@@ -710,7 +736,7 @@ export default function App() {
     const leastNum = appearedList[appearedList.length - 1];
 
     const combinedSet = new Set([...nonAppeared, mostNum, leastNum]);
-    fixedNumbers.forEach((fn) => combinedSet.delete(fn)); // 고정수는 제외수에서 제외
+    fixedNumbers.forEach((fn) => combinedSet.delete(fn));
 
     const resultArr = Array.from(combinedSet).sort((a, b) => a - b);
 
@@ -763,7 +789,7 @@ export default function App() {
         title = `🎲 기본 무작위 5세트 생성${fixedDesc}`;
       } else if (optionType === 'OPT_STRICT') {
         newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers, fixedNumbers));
-        title = `📊 통계 정밀 필터 (4등 1회↑ 보장)${fixedDesc}`;
+        title = `📊 통계 정밀 필터 (4등 1회↑ 보장 + 2연속이월 제외)${fixedDesc}`;
       }
 
       setGames(newGames);
@@ -888,7 +914,6 @@ export default function App() {
     );
   };
 
-  // 제외수 토글 (고정수에 있으면 고정수 해제 후 제외수로)
   const toggleExcludeNumber = (num) => {
     if (excludedNumbers.includes(num)) {
       setExcludedNumbers(excludedNumbers.filter((n) => n !== num));
@@ -897,12 +922,11 @@ export default function App() {
         Alert.alert('알림', '최소 6개의 번호는 남아있어야 합니다 (최대 39개 제외).');
         return;
       }
-      setFixedNumbers(fixedNumbers.filter((n) => n !== num)); // 고정수에서 제거
+      setFixedNumbers(fixedNumbers.filter((n) => n !== num));
       setExcludedNumbers([...excludedNumbers, num].sort((a, b) => a - b));
     }
   };
 
-  // 고정수 토글 (최대 5개, 제외수에 있으면 제외수 해제 후 고정수로)
   const toggleFixedNumber = (num) => {
     if (fixedNumbers.includes(num)) {
       setFixedNumbers(fixedNumbers.filter((n) => n !== num));
@@ -911,7 +935,7 @@ export default function App() {
         Alert.alert('알림', '고정수는 최대 5개까지만 선택할 수 있습니다.');
         return;
       }
-      setExcludedNumbers(excludedNumbers.filter((n) => n !== num)); // 제외수에서 제거
+      setExcludedNumbers(excludedNumbers.filter((n) => n !== num));
       setFixedNumbers([...fixedNumbers, num].sort((a, b) => a - b));
     }
   };
@@ -1339,6 +1363,7 @@ export default function App() {
   };
 
   const latestWinningInfo = getLottoNumbersByRound(latestRound);
+  const recent3WeeksData = getRecent3WeeksCarryOverData();
 
   return (
     <View style={styles.fullScreenContainer}>
@@ -1414,7 +1439,7 @@ export default function App() {
                 <Text style={styles.modalTitle}>{generationTitle}</Text>
                 <Text style={styles.modalSubtitle}>
                   {activeGenOption === 'OPT_STRICT'
-                    ? '합 115~179 · 연속제한 · AC≥7 · 끝수중복배제 · 역대 4등 1회↑'
+                    ? '합 115~179 · 연속제한 · AC≥7 · 4등1회↑ · 2연속이월수 배제'
                     : '제외수/고정수 반영 무작위 추출'}
                 </Text>
               </View>
@@ -1423,7 +1448,6 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* 고정수 활성화 안내 뱃지 */}
             {fixedNumbers.length > 0 && (
               <View style={styles.appliedFixedBanner}>
                 <Text style={styles.appliedFixedBannerText}>
@@ -1432,7 +1456,6 @@ export default function App() {
               </View>
             )}
 
-            {/* 직접 번호 생성 버튼 */}
             <TouchableOpacity
               style={styles.manualTopOptionBtn}
               onPress={() => {
@@ -1484,7 +1507,7 @@ export default function App() {
                 activeOpacity={0.85}
               >
                 <Text style={styles.bottomOptionBtnTitle}>📊 통계 정밀 필터</Text>
-                <Text style={styles.bottomOptionBtnSub}>(4등 1회↑·합·AC·끝수)</Text>
+                <Text style={styles.bottomOptionBtnSub}>(4등 1회↑·2연속이월 배제)</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1732,7 +1755,6 @@ export default function App() {
       >
         <View style={styles.centerModalOverlay}>
           <View style={styles.excludePopupBox}>
-            {/* 상단 탭 전환: 제외수 vs 고정수 */}
             <View style={styles.filterTabContainer}>
               <TouchableOpacity
                 style={[styles.filterTabItem, filterModalTab === 'EXCLUDE' && styles.filterTabItemActive]}
@@ -1763,7 +1785,6 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* 상태 요약 바 */}
             <View style={[styles.excludeCountBar, filterModalTab === 'FIXED' && { backgroundColor: '#dcfce7' }]}>
               {filterModalTab === 'EXCLUDE' ? (
                 <Text style={styles.excludeCountText}>
@@ -1771,7 +1792,7 @@ export default function App() {
                 </Text>
               ) : (
                 <Text style={[styles.excludeCountText, { color: '#166534' }]}>
-                  고정수 : <Text style={{ color: '#15803d', fontWeight: '900' }}>{fixedNumbers.length}개</Text> (최대 5개, 번호 생성 시 필수 포함)
+                  고정수 : <Text style={{ color: '#15803d', fontWeight: '900' }}>{fixedNumbers.length}개</Text> (최대 5개, 필수 포함)
                 </Text>
               )}
 
@@ -1787,7 +1808,114 @@ export default function App() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 490 }}>
-              {/* 고정수 모드일 때: 출현빈도 기반 4대 고정수 선택 옵션 패널 */}
+              {/* 고정수 모드: 직전/2주전/3주전 이월수 구별 표시 패널 */}
+              {filterModalTab === 'FIXED' && (
+                <View style={styles.carryOverSectionBox}>
+                  <View style={styles.carryOverHeaderRow}>
+                    <Text style={styles.carryOverHeaderTitle}>
+                      🔄 최근 3주간 이월수 구별 및 고정수 지정:
+                    </Text>
+                  </View>
+
+                  {/* 1. 직전 회차 (1주 전) 당첨번호 */}
+                  <View style={styles.carryOverWeekRow}>
+                    <View style={styles.carryOverWeekLabelBoxRed}>
+                      <Text style={styles.carryOverWeekLabelText}>직전 1주전</Text>
+                      <Text style={styles.carryOverWeekSubText}>제{latestRound}회</Text>
+                    </View>
+                    <View style={styles.carryOverBallsFlex}>
+                      {recent3WeeksData.round1Numbers.map((num) => {
+                        const isFixed = fixedNumbers.includes(num);
+                        const isDouble = recent3WeeksData.doubleCarryOver.includes(num);
+                        return (
+                          <TouchableOpacity
+                            key={`c1-${num}`}
+                            style={[styles.carryOverBallTouch, isFixed && styles.carryOverBallTouchFixed]}
+                            onPress={() => toggleFixedNumber(num)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[styles.carryOverBallCircle, { backgroundColor: getBallColor(num) }]}>
+                              <Text style={styles.carryOverBallCircleText}>{num}</Text>
+                            </View>
+                            {isFixed && <Text style={styles.carryOverPinMark}>📌</Text>}
+                            {isDouble && (
+                              <View style={styles.doubleWarnBadge}>
+                                <Text style={styles.doubleWarnBadgeText}>2연속</Text>
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  {/* 2. 2주 전 당첨번호 */}
+                  {latestRound > 1 && (
+                    <View style={styles.carryOverWeekRow}>
+                      <View style={styles.carryOverWeekLabelBoxBlue}>
+                        <Text style={styles.carryOverWeekLabelText}>2주 전</Text>
+                        <Text style={styles.carryOverWeekSubText}>제{latestRound - 1}회</Text>
+                      </View>
+                      <View style={styles.carryOverBallsFlex}>
+                        {recent3WeeksData.round2Numbers.map((num) => {
+                          const isFixed = fixedNumbers.includes(num);
+                          return (
+                            <TouchableOpacity
+                              key={`c2-${num}`}
+                              style={[styles.carryOverBallTouch, isFixed && styles.carryOverBallTouchFixed]}
+                              onPress={() => toggleFixedNumber(num)}
+                              activeOpacity={0.7}
+                            >
+                              <View style={[styles.carryOverBallCircle, { backgroundColor: getBallColor(num) }]}>
+                                <Text style={styles.carryOverBallCircleText}>{num}</Text>
+                              </View>
+                              {isFixed && <Text style={styles.carryOverPinMark}>📌</Text>}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* 3. 3주 전 당첨번호 */}
+                  {latestRound > 2 && (
+                    <View style={styles.carryOverWeekRow}>
+                      <View style={styles.carryOverWeekLabelBoxGreen}>
+                        <Text style={styles.carryOverWeekLabelText}>3주 전</Text>
+                        <Text style={styles.carryOverWeekSubText}>제{latestRound - 2}회</Text>
+                      </View>
+                      <View style={styles.carryOverBallsFlex}>
+                        {recent3WeeksData.round3Numbers.map((num) => {
+                          const isFixed = fixedNumbers.includes(num);
+                          return (
+                            <TouchableOpacity
+                              key={`c3-${num}`}
+                              style={[styles.carryOverBallTouch, isFixed && styles.carryOverBallTouchFixed]}
+                              onPress={() => toggleFixedNumber(num)}
+                              activeOpacity={0.7}
+                            >
+                              <View style={[styles.carryOverBallCircle, { backgroundColor: getBallColor(num) }]}>
+                                <Text style={styles.carryOverBallCircleText}>{num}</Text>
+                              </View>
+                              {isFixed && <Text style={styles.carryOverPinMark}>📌</Text>}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  )}
+
+                  {recent3WeeksData.doubleCarryOver.length > 0 && (
+                    <View style={styles.doubleCarryInfoBar}>
+                      <Text style={styles.doubleCarryInfoText}>
+                        ⚠️ [직전+2주전] 연속 2번 출현수 ({recent3WeeksData.doubleCarryOver.join(', ')}): 통계 필터 생성 시 자동 배제됩니다.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* 고정수 모드: 기존 4대 출현 빈도 기반 프리셋 패널 */}
               {filterModalTab === 'FIXED' && (
                 <View style={styles.fixedPresetContainer}>
                   <Text style={styles.fixedPresetTitle}>
@@ -1852,7 +1980,6 @@ export default function App() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* 선택된 조건의 번호 목록 출력 및 고정수 등록 안내 */}
                   {selectedFixedPresetKey && (
                     <View style={styles.presetResultContainer}>
                       <View style={styles.presetResultHeaderRow}>
@@ -1861,7 +1988,6 @@ export default function App() {
                         </Text>
                         <TouchableOpacity
                           onPress={() => {
-                            // 앞 5개 자동 일괄 선택
                             const toAdd = presetFixedMatchedNumbers.slice(0, 5);
                             setExcludedNumbers(excludedNumbers.filter((n) => !toAdd.includes(n)));
                             setFixedNumbers(toAdd);
@@ -2051,14 +2177,12 @@ export default function App() {
                         {num}
                       </Text>
 
-                      {/* 제외 표시 */}
                       {isExcluded && (
                         <View style={styles.ballStrikeBadge}>
                           <Text style={styles.ballStrikeX}>✕</Text>
                         </View>
                       )}
 
-                      {/* 고정 표시 */}
                       {isFixed && (
                         <View style={styles.ballFixedBadge}>
                           <Text style={styles.ballFixedPin}>📌</Text>
@@ -2478,7 +2602,6 @@ export default function App() {
 
             {analysisTargetData && (
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
-                {/* 6개 번호 표시 바 */}
                 <View style={styles.analysisBallsCard}>
                   <View style={styles.analysisBallsRow}>
                     {analysisTargetData.numbers.map((n) => (
@@ -2497,7 +2620,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* [신규 기능] 로또 용지(SLIP) 번호 체킹 패턴 분석표 */}
+                {/* 로또 용지 마킹 패턴 분석표 (7x7 SLIP) */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
@@ -2508,7 +2631,6 @@ export default function App() {
                     </Text>
                   </View>
 
-                  {/* 7x7 용지 그리드 */}
                   <View style={styles.slipGridBox}>
                     {Array.from({ length: 7 }, (_, rIdx) => (
                       <View key={`slip-row-${rIdx}`} style={styles.slipGridRow}>
@@ -2548,7 +2670,6 @@ export default function App() {
                     ))}
                   </View>
 
-                  {/* 용지 가로줄 / 세로줄 패턴 요약 통계 */}
                   <View style={styles.slipStatsPanel}>
                     <View style={styles.slipStatRow}>
                       <Text style={styles.slipStatLabel}>가로줄(1~7행) 출현 분포:</Text>
@@ -2577,7 +2698,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 지표 그리드 */}
+                {/* 5가지 핵심 지표 */}
                 <View style={styles.metricGrid}>
                   <View style={styles.metricItem}>
                     <Text style={styles.metricLabel}>홀짝 비율</Text>
@@ -2627,7 +2748,6 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 누적 등수별 당첨 횟수 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🏆 역대 회차 누적 등수별 당첨 횟수
@@ -2648,7 +2768,6 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 번호별 최근 30회 빈도 및 직전 미출현 주기 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     📈 번호별 최근 30회 빈도 및 직전 미출현 주기
@@ -2677,7 +2796,6 @@ export default function App() {
                   ))}
                 </View>
 
-                {/* 번호간 동반 출현 횟수 TOP 3 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🤝 번호간 동반 출현 횟수 TOP 3 (케미 번호)
@@ -3434,6 +3552,130 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
+  // [신규] 최근 3주간 이월수 구별 및 고정수 지정 패널
+  carryOverSectionBox: {
+    backgroundColor: '#ffffff',
+    marginHorizontal: 10,
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  carryOverHeaderRow: {
+    marginBottom: 6,
+  },
+  carryOverHeaderTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  carryOverWeekRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 4,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    padding: 6,
+  },
+  carryOverWeekLabelBoxRed: {
+    width: 68,
+    backgroundColor: '#fee2e2',
+    borderRadius: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+  },
+  carryOverWeekLabelBoxBlue: {
+    width: 68,
+    backgroundColor: '#e0f2fe',
+    borderRadius: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+  },
+  carryOverWeekLabelBoxGreen: {
+    width: 68,
+    backgroundColor: '#dcfce7',
+    borderRadius: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  carryOverWeekLabelText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  carryOverWeekSubText: {
+    fontSize: 9,
+    color: '#64748b',
+    fontWeight: '700',
+  },
+  carryOverBallsFlex: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  carryOverBallTouch: {
+    position: 'relative',
+    alignItems: 'center',
+  },
+  carryOverBallTouchFixed: {
+    transform: [{ scale: 1.08 }],
+  },
+  carryOverBallCircle: {
+    width: 27,
+    height: 27,
+    borderRadius: 13.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  carryOverBallCircleText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  carryOverPinMark: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    fontSize: 9,
+  },
+  doubleWarnBadge: {
+    position: 'absolute',
+    bottom: -6,
+    backgroundColor: '#dc2626',
+    borderRadius: 4,
+    paddingHorizontal: 2,
+  },
+  doubleWarnBadgeText: {
+    color: '#ffffff',
+    fontSize: 7,
+    fontWeight: '900',
+  },
+  doubleCarryInfoBar: {
+    marginTop: 6,
+    backgroundColor: '#fffbeb',
+    borderRadius: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+  },
+  doubleCarryInfoText: {
+    fontSize: 10,
+    color: '#b45309',
+    fontWeight: '700',
+  },
+
   // 고정수 4대 프리셋 관련 스타일
   fixedPresetContainer: {
     backgroundColor: '#f0fdf4',
@@ -4074,8 +4316,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#94a3b8',
   },
-
-  // 용지 슬립 패턴 분석 스타일
   slipCardHeader: {
     marginBottom: 8,
   },
@@ -4189,7 +4429,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#b91c1c',
   },
-
   metricGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
