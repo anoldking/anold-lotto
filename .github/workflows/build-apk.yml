@@ -33,12 +33,12 @@ jobs:
 
       - name: 5. Expo Prebuild (네이티브 android 폴더 생성)
         run: |
-          # index.js가 없으면 자동 생성 보정
+          # 1) index.js가 없으면 자동 생성 보정
           if [ ! -f index.js ]; then
             echo "import { registerRootComponent } from 'expo'; import App from './App'; registerRootComponent(App);" > index.js
           fi
 
-          # 에셋 폴더 기본 보정
+          # 2) 에셋 및 JSON 데이터 누락 방지 보정
           mkdir -p assets
           if [ -f main_bg.png ] && [ ! -f assets/main_bg.png ]; then
             cp main_bg.png assets/main_bg.png
@@ -52,14 +52,19 @@ jobs:
 
           npx expo prebuild --platform android --clean --no-install
 
-      - name: 6. Gradle 오프라인 번들 포함 APK 빌드
+      - name: 6. Release 빌드 시 기본 디버그 키스토어 자동 적용
+        run: |
+          # 릴리즈 서명 키 누락 에러를 방지하기 위해 debug.keystore를 release 서명으로 주입
+          sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
+
+      - name: 7. 완전 오프라인 포함 Release APK 빌드
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug -PbundleInDebug=true --no-daemon -x lint -x test
+          ./gradlew assembleRelease --no-daemon -x lint -x test
 
-      - name: 7. 빌드된 APK 파일 업로드 (다운로드 제공)
+      - name: 8. 빌드된 APK 파일 업로드 (다운로드 제공)
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: lotto-app-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
