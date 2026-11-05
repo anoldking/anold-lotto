@@ -78,7 +78,7 @@ const getBallColor = (number) => {
   return '#22c55e';
 };
 
-// 1을 포함한 소수 집합 정의 (1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43)
+// 1을 포함한 소수 집합 정의
 const PRIME_SET_WITH_ONE = new Set([1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43]);
 // 쌍둥이수 집합 (11, 22, 33, 44)
 const TWIN_NUMBERS = new Set([11, 22, 33, 44]);
@@ -99,10 +99,7 @@ const generateBasicLottoSet = (excludedNumbers = []) => {
   return Array.from(selected).sort((a, b) => a - b);
 };
 
-// =================================================================
-// [20대 정밀 필터링 연산 유틸]
-// =================================================================
-
+// AC값 계산
 const calculateACValue = (sorted) => {
   const diffs = new Set();
   for (let i = 0; i < sorted.length; i++) {
@@ -113,6 +110,7 @@ const calculateACValue = (sorted) => {
   return diffs.size - (sorted.length - 1);
 };
 
+// 7x7 용지 마킹 패턴 계산
 const getPaperDeadPattern = (numbers) => {
   const rowCounts = [0, 0, 0, 0, 0, 0, 0];
   const colCounts = [0, 0, 0, 0, 0, 0, 0];
@@ -130,18 +128,14 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-const hasDoubleConsecutiveCarryOver = (candidate, doubleCarryOverNumbers = []) => {
-  if (!doubleCarryOverNumbers || doubleCarryOverNumbers.length === 0) return false;
-  return candidate.some((n) => doubleCarryOverNumbers.includes(n));
-};
-
-const isStrictStatisticallyValid = (numbers, dynamicContext) => {
+// 사용자가 설정한 12대 필터 ON/OFF를 반영한 통계 판별기
+const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLimit = 3) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
   const maxNum = sorted[5];
 
+  // 기본 간격 & 고저차
   if (minNum > 15 || maxNum < 30) return false;
-
   const range = maxNum - minNum;
   if (range < 25 || range > 44) return false;
 
@@ -152,87 +146,116 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   }
   if (maxAdjacentDiff < 6 || maxAdjacentDiff > 25) return false;
 
-  const sum = sorted.reduce((acc, cur) => acc + cur, 0);
-  if (sum < 100 || sum > 180) return false;
-
-  const oddCount = sorted.filter((n) => n % 2 !== 0).length;
-  if (oddCount < 2 || oddCount > 4) return false;
-
-  const lowCount = sorted.filter((n) => n <= 22).length;
-  if (lowCount < 2 || lowCount > 4) return false;
-
-  const ac = calculateACValue(sorted);
-  if (ac < 7 || ac > 10) return false;
-
-  const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
-  if (primeCount < 1 || primeCount > 2) return false;
-
-  const mult3Count = sorted.filter((n) => n % 3 === 0).length;
-  if (mult3Count < 1 || mult3Count > 3) return false;
-
-  const mult5Count = sorted.filter((n) => n % 5 === 0).length;
-  if (mult5Count >= 3) return false;
-
-  const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
-  if (twinCount >= 2) return false;
-
-  const lastDigitCounts = {};
-  for (const n of sorted) {
-    const d = n % 10;
-    lastDigitCounts[d] = (lastDigitCounts[d] || 0) + 1;
-    if (lastDigitCounts[d] >= 3) return false;
+  // 1. 번호 총합 필터 (100 ~ 180)
+  if (filters.useSum) {
+    const sum = sorted.reduce((acc, cur) => acc + cur, 0);
+    if (sum < 100 || sum > 180) return false;
   }
 
-  let consecutivePairs = 0;
-  for (let i = 0; i < sorted.length - 1; i++) {
-    if (sorted[i + 1] - sorted[i] === 1) {
-      if (i < sorted.length - 2 && sorted[i + 2] - sorted[i + 1] === 1) {
-        return false;
-      }
-      consecutivePairs++;
-      i++;
+  // 2. 홀짝 비율 필터 (2:4, 3:3, 4:2)
+  if (filters.useOddEven) {
+    const oddCount = sorted.filter((n) => n % 2 !== 0).length;
+    if (oddCount < 2 || oddCount > 4) return false;
+  }
+
+  // 3. 고저 비율 필터 (22 기준 2:4, 3:3, 4:2)
+  if (filters.useHighLow) {
+    const lowCount = sorted.filter((n) => n <= 22).length;
+    if (lowCount < 2 || lowCount > 4) return false;
+  }
+
+  // 4. AC값 필터 (7 ~ 10)
+  if (filters.useAC) {
+    const ac = calculateACValue(sorted);
+    if (ac < 7 || ac > 10) return false;
+  }
+
+  // 5. 소수 개수 필터 (소수 최대 출현수 maxPrimeLimit까지 허용: 기본 3개, 최대 4개)
+  if (filters.usePrime) {
+    const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
+    if (primeCount < 1 || primeCount > maxPrimeLimit) return false;
+  }
+
+  // 6. 3의 배수 필터 (1 ~ 3개)
+  if (filters.useMult3) {
+    const mult3Count = sorted.filter((n) => n % 3 === 0).length;
+    if (mult3Count < 1 || mult3Count > 3) return false;
+  }
+
+  // 7. 5의 배수 필터 (최대 2개 허용, 3개 이상 차단)
+  if (filters.useMult5) {
+    const mult5Count = sorted.filter((n) => n % 5 === 0).length;
+    if (mult5Count >= 3) return false;
+  }
+
+  // 8. 쌍둥이수 필터 (최대 1개 허용, 2개 이상 차단)
+  if (filters.useTwin) {
+    const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
+    if (twinCount >= 2) return false;
+  }
+
+  // 9. 동일 끝수 필터 (3개 이상 차단)
+  if (filters.useSameEnd) {
+    const lastDigitCounts = {};
+    for (const n of sorted) {
+      const d = n % 10;
+      lastDigitCounts[d] = (lastDigitCounts[d] || 0) + 1;
+      if (lastDigitCounts[d] >= 3) return false;
     }
   }
-  if (consecutivePairs > 1) return false;
 
-  const sectionCounts = [0, 0, 0, 0, 0];
-  sorted.forEach((n) => {
-    if (n <= 9) sectionCounts[0]++;
-    else if (n <= 19) sectionCounts[1]++;
-    else if (n <= 29) sectionCounts[2]++;
-    else if (n <= 39) sectionCounts[3]++;
-    else sectionCounts[4]++;
-  });
-  const deadSections = sectionCounts.filter((cnt) => cnt === 0).length;
-  if (deadSections < 1 || deadSections > 2) return false;
+  // 10. 연속번호 필터 (3연번 차단 & 2연번 1쌍 이하)
+  if (filters.useConsecutive) {
+    let consecutivePairs = 0;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (sorted[i + 1] - sorted[i] === 1) {
+        if (i < sorted.length - 2 && sorted[i + 2] - sorted[i + 1] === 1) {
+          return false;
+        }
+        consecutivePairs++;
+        i++;
+      }
+    }
+    if (consecutivePairs > 1) return false;
+  }
 
-  const { deadRows, deadCols } = getPaperDeadPattern(sorted);
-  if (deadRows < 2 || deadRows > 4) return false;
-  if (deadCols < 2 || deadCols > 4) return false;
+  // 11. 10단위 구간 멸 필터 (1~2개 멸)
+  if (filters.useSectionDead) {
+    const sectionCounts = [0, 0, 0, 0, 0];
+    sorted.forEach((n) => {
+      if (n <= 9) sectionCounts[0]++;
+      else if (n <= 19) sectionCounts[1]++;
+      else if (n <= 29) sectionCounts[2]++;
+      else if (n <= 39) sectionCounts[3]++;
+      else sectionCounts[4]++;
+    });
+    const deadSections = sectionCounts.filter((cnt) => cnt === 0).length;
+    if (deadSections < 1 || deadSections > 2) return false;
+  }
 
+  // 12. 용지 마킹 멸 패턴 (가로 멸 2~4개 & 세로 멸 2~4개)
+  if (filters.usePaperPattern) {
+    const { deadRows, deadCols } = getPaperDeadPattern(sorted);
+    if (deadRows < 2 || deadRows > 4) return false;
+    if (deadCols < 2 || deadCols > 4) return false;
+  }
+
+  // 이월수 및 과열수 동적 조건 검증
   if (dynamicContext) {
     const { round1Numbers, doubleCarryOver, hot5w3, hot10w4, hot20w5, cold20w } = dynamicContext;
 
-    if (round1Numbers && round1Numbers.length > 0) {
+    if (filters.useCarryOver && round1Numbers && round1Numbers.length > 0) {
       const carryCount = sorted.filter((n) => round1Numbers.includes(n)).length;
       if (carryCount >= 2) return false;
     }
 
-    if (doubleCarryOver && doubleCarryOver.length > 0) {
+    if (filters.useDoubleCarry && doubleCarryOver && doubleCarryOver.length > 0) {
       if (sorted.some((n) => doubleCarryOver.includes(n))) return false;
     }
 
-    if (hot5w3 && hot5w3.length > 0) {
-      if (sorted.some((n) => hot5w3.includes(n))) return false;
-    }
-
-    if (hot10w4 && hot10w4.length > 0) {
-      if (sorted.some((n) => hot10w4.includes(n))) return false;
-    }
-
-    if (hot20w5 && hot20w5.length > 0) {
-      if (sorted.some((n) => hot20w5.includes(n))) return false;
-    }
+    if (hot5w3 && hot5w3.length > 0 && sorted.some((n) => hot5w3.includes(n))) return false;
+    if (hot10w4 && hot10w4.length > 0 && sorted.some((n) => hot10w4.includes(n))) return false;
+    if (hot20w5 && hot20w5.length > 0 && sorted.some((n) => hot20w5.includes(n))) return false;
     if (cold20w && cold20w.length > 0) {
       const coldCount = sorted.filter((n) => cold20w.includes(n)).length;
       if (coldCount >= 2) return false;
@@ -291,9 +314,31 @@ export default function App() {
   const [generationTitle, setGenerationTitle] = useState('🎉 번호 추첨 완료');
   const [activeGenOption, setActiveGenOption] = useState('OPT_STRICT');
 
+  // 제외수 전용 상태
   const [excludedNumbers, setExcludedNumbers] = useState([]);
   const [includeBonusInExclude, setIncludeBonusInExclude] = useState(false);
   const [excludeAnalysisRounds, setExcludeAnalysisRounds] = useState(10);
+  const [excludePopupTab, setExcludePopupTab] = useState('NUMBERS'); // 'NUMBERS' 또는 'FILTERS'
+
+  // [신규] 12대 필터 ON/OFF 직접 설정 상태
+  const [filterSettings, setFilterSettings] = useState({
+    useAC: true,          // 1. AC값 7~10
+    useSum: true,         // 2. 총합 100~180
+    useOddEven: true,     // 3. 홀짝 비율
+    useHighLow: true,     // 4. 고저 비율
+    usePrime: true,       // 5. 소수 출현수 제어
+    useMult3: true,       // 6. 3의 배수(1~3개)
+    useMult5: true,       // 7. 5의 배수(최대 2개)
+    useCarryOver: true,   // 8. 직전 이월수(최대 1개)
+    useDoubleCarry: true, // 9. 2연속 이월 차단
+    useConsecutive: true, // 10. 연번 제어(3연번 차단)
+    useSameEnd: true,     // 11. 동일 끝수(3개이상 차단)
+    usePaperPattern: true,// 12. 용지 마킹 멸 패턴(가로/세로 2~4)
+    useSectionDead: true, // 보조. 10단위 1~2개 멸
+  });
+
+  // [신규] 소수 최대 출현수 설정 (기본 3개, 최대 4개까지 선택 가능)
+  const [maxPrimeCount, setMaxPrimeCount] = useState(3);
 
   // 용지 마킹 패턴표 토글: [🔴 이번주], [🔵 1주 전], [🟢 2주 전]
   const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
@@ -511,6 +556,7 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
+  // 설정된 필터 및 소수 최대 개수를 적용한 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -521,15 +567,22 @@ export default function App() {
         const candidate = generateBasicLottoSet(excluded);
         if (candidate.length < 6) return [];
 
-        if (isStrictStatisticallyValid(candidate, dynamicContext)) {
+        if (isStrictStatisticallyValid(candidate, dynamicContext, filterSettings, maxPrimeCount)) {
           return candidate;
         }
       }
 
       return generateBasicLottoSet(excluded);
     },
-    [getDynamicContextData]
+    [getDynamicContextData, filterSettings, maxPrimeCount]
   );
+
+  const toggleFilterKey = (key) => {
+    setFilterSettings((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
 
   const getExcludeAnalysisData = useCallback(() => {
     const { round1Numbers, doubleCarryOver, hot10w4 } = getDynamicContextData();
@@ -589,7 +642,6 @@ export default function App() {
     Alert.alert('스마트 추천 제외수 적용', `총 ${finalResult.length}개 추천 번호가 제외수로 설정되었습니다.\n\n번호: ${finalResult.join(', ')}`);
   };
 
-  // ================= [공용 정밀 분석 데이터 생성기] =================
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -682,18 +734,12 @@ export default function App() {
       const numbers1WeekAgo = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
       const numbers2WeeksAgo = targetBaseRound > 2 ? getLottoNumbersByRound(targetBaseRound - 2)?.numbers || [] : [];
 
-      // [신규 계산] 소수 / 합성수
       const primeNumbers = nums.filter((n) => PRIME_SET_WITH_ONE.has(n));
       const compositeNumbers = nums.filter((n) => !PRIME_SET_WITH_ONE.has(n));
-
-      // [신규 계산] 3의 배수 / 5의 배수
       const mult3Numbers = nums.filter((n) => n % 3 === 0);
       const mult5Numbers = nums.filter((n) => n % 5 === 0);
-
-      // [신규 계산] 쌍둥이수 (11, 22, 33, 44)
       const twinNumbers = nums.filter((n) => TWIN_NUMBERS.has(n));
 
-      // [신규 계산] 동일 끝수 쌍
       const endDigitMap = {};
       nums.forEach((n) => {
         const d = n % 10;
@@ -702,7 +748,6 @@ export default function App() {
       });
       const sameEndPairs = Object.entries(endDigitMap).filter(([_, list]) => list.length >= 2);
 
-      // [신규 계산] 연속번호(연번) 쌍
       const consecutivePairsList = [];
       for (let i = 0; i < nums.length - 1; i++) {
         if (nums[i + 1] - nums[i] === 1) {
@@ -710,7 +755,6 @@ export default function App() {
         }
       }
 
-      // [신규 계산] 핫수(최단기 출현) & 콜드수(최장기 미출)
       const minAbsenceVal = Math.min(...nums.map((n) => absenceWeeks[n]));
       const hotNumbersInSet = nums.filter((n) => absenceWeeks[n] === minAbsenceVal);
 
@@ -744,7 +788,6 @@ export default function App() {
         colCounts,
         deadRowCount: deadRows,
         deadColCount: deadCols,
-        // 패턴 & 특수수 지표
         primeNumbers,
         compositeNumbers,
         mult3Numbers,
@@ -1271,7 +1314,7 @@ export default function App() {
         title = '🎲 기본 무작위 5세트 생성';
       } else if (optionType === 'OPT_STRICT') {
         newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers));
-        title = '📊 20대 정밀 필터링 5세트 생성';
+        title = '📊 12대 정밀 필터링 5세트 생성';
       }
 
       setGames(newGames);
@@ -1473,7 +1516,7 @@ export default function App() {
                 <Text style={styles.modalTitle}>{generationTitle}</Text>
                 <Text style={styles.modalSubtitle}>
                   {activeGenOption === 'OPT_STRICT'
-                    ? 'AC 7~10 · 합100~180 · 소수1~2 · 2연속이월제외 · 멸구간 2~4'
+                    ? `12대 정밀 필터 적용 (소수 1~${maxPrimeCount}개 허용)`
                     : '제외수 반영 무작위 6개 추출'}
                 </Text>
               </View>
@@ -1520,8 +1563,8 @@ export default function App() {
                 onPress={() => handleGenerateWithOptions('OPT_STRICT')}
                 activeOpacity={0.85}
               >
-                <Text style={styles.bottomOptionBtnTitle}>📊 20대 정밀 필터링</Text>
-                <Text style={styles.bottomOptionBtnSub}>(AC·합계·소수·이월·멸패턴 완벽적용)</Text>
+                <Text style={styles.bottomOptionBtnTitle}>📊 12대 정밀 필터링</Text>
+                <Text style={styles.bottomOptionBtnSub}>(소수 최대 {maxPrimeCount}개·이월·멸패턴)</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1552,15 +1595,15 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 3] 저장한 번호 목록 모달 */}
+      {/* [모달 3] 저장한 번호 목록 모달 (전체화면 적용 - 하단 메인화면 노출 완전 차단) */}
       <Modal
         visible={isSavedModalVisible}
         animationType="slide"
-        transparent={true}
+        transparent={false}
         onRequestClose={() => setIsSavedModalVisible(false)}
       >
-        <View style={styles.bottomModalContainer}>
-          <View style={styles.modalHeader}>
+        <SafeAreaView style={styles.fullScreenModalContainer}>
+          <View style={styles.fullScreenModalHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Text style={styles.modalTitle}>📂 내가 저장한 번호 목록</Text>
               <View style={styles.savedModalCounterBadge}>
@@ -1572,11 +1615,11 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
-          <Text style={[styles.modalSubtitle, { marginBottom: 10 }]}>
+          <Text style={[styles.modalSubtitle, { marginHorizontal: 16, marginBottom: 10 }]}>
             최신 제{latestRound}회 결과 및 누적 당첨 분석
           </Text>
 
-          <View style={styles.exportButtonGroup}>
+          <View style={[styles.exportButtonGroup, { marginHorizontal: 16 }]}>
             <TouchableOpacity style={styles.exportPdfBtn} onPress={handleExportPDF} activeOpacity={0.8}>
               <Text style={styles.exportPdfBtnText}>📄 PDF</Text>
             </TouchableOpacity>
@@ -1591,13 +1634,15 @@ export default function App() {
           </View>
 
           {savedSets.length > 0 && (
-            <TouchableOpacity style={styles.oppositeBannerBtn} onPress={handleGenerateOpposite} activeOpacity={0.85}>
-              <Text style={styles.oppositeBannerBtnTitle}>⚡ 저장 안 된 번호로만 뽑기</Text>
-              <Text style={styles.oppositeBannerBtnSub}>[반대번호] 5세트 생성 ➔</Text>
-            </TouchableOpacity>
+            <View style={{ marginHorizontal: 16 }}>
+              <TouchableOpacity style={styles.oppositeBannerBtn} onPress={handleGenerateOpposite} activeOpacity={0.85}>
+                <Text style={styles.oppositeBannerBtnTitle}>⚡ 저장 안 된 번호로만 뽑기</Text>
+                <Text style={styles.oppositeBannerBtnSub}>[반대번호] 5세트 생성 ➔</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
-          <View style={styles.winningReferenceBar}>
+          <View style={[styles.winningReferenceBar, { marginHorizontal: 16 }]}>
             <View style={styles.winningRefHeaderRow}>
               <Text style={styles.winningReferenceTitle}>
                 최신 기준: 제{latestRound}회 ({latestWinningInfo.drwNoDate})
@@ -1623,7 +1668,7 @@ export default function App() {
             </View>
           </View>
 
-          <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView style={styles.fullScreenScroll} showsVerticalScrollIndicator={false}>
             {savedSets.length === 0 ? (
               <View style={styles.emptyBox}>
                 <Text style={styles.emptyText}>저장된 로또 번호가 없습니다.</Text>
@@ -1752,13 +1797,15 @@ export default function App() {
             )}
           </ScrollView>
 
-          <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsSavedModalVisible(false)}>
-            <Text style={styles.btnTextWhite}>닫기</Text>
-          </TouchableOpacity>
-        </View>
+          <View style={{ padding: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' }}>
+            <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsSavedModalVisible(false)}>
+              <Text style={styles.btnTextWhite}>닫기</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
       </Modal>
 
-      {/* [모달 4] 스마트 제외수 전용 설정 모달 */}
+      {/* [모달 4] 제외수 & 12대 필터 ON/OFF 직접 편집 팝업 모달 */}
       <Modal
         visible={isExcludeModalVisible}
         animationType="fade"
@@ -1767,8 +1814,28 @@ export default function App() {
       >
         <View style={styles.centerModalOverlay}>
           <View style={styles.excludePopupBox}>
-            <View style={styles.excludeHeaderBox}>
-              <Text style={styles.excludeHeaderTitle}>🚫 제외수 설정</Text>
+            {/* 상단 탭: 번호 제외 vs 12대 필터 편집 */}
+            <View style={styles.excludeTabRow}>
+              <TouchableOpacity
+                style={[styles.excludeTabItem, excludePopupTab === 'NUMBERS' && styles.excludeTabItemActive]}
+                onPress={() => setExcludePopupTab('NUMBERS')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.excludeTabItemText, excludePopupTab === 'NUMBERS' && styles.excludeTabItemTextActive]}>
+                  🚫 번호 수동 제외 ({excludedNumbers.length})
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.excludeTabItem, excludePopupTab === 'FILTERS' && styles.excludeTabItemActiveFilter]}
+                onPress={() => setExcludePopupTab('FILTERS')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.excludeTabItemText, excludePopupTab === 'FILTERS' && styles.excludeTabItemTextActiveFilter]}>
+                  ⚙️ 12대 필터 ON/OFF 편집
+                </Text>
+              </TouchableOpacity>
+
               <TouchableOpacity
                 onPress={() => setIsExcludeModalVisible(false)}
                 style={styles.excludeCloseTouch}
@@ -1778,215 +1845,265 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.excludeCountBar}>
-              <Text style={styles.excludeCountText}>
-                설정된 제외수: <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (권장: 10~15개 / 최대: 39개)
-              </Text>
-
-              <TouchableOpacity
-                style={[styles.bonusToggleBtn, includeBonusInExclude && styles.bonusToggleBtnActive]}
-                onPress={() => setIncludeBonusInExclude((prev) => !prev)}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.bonusToggleBtnText, includeBonusInExclude && styles.bonusToggleBtnTextActive]}>
-                  보너스 {includeBonusInExclude ? '포함 ON' : '미포함'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 490 }}>
-              <View style={styles.smartFormulaPanel}>
-                <View style={styles.smartFormulaHeaderRow}>
-                  <Text style={styles.smartFormulaTitle}>🎯 통계 공식 기반 추천 제외수 원터치 적용</Text>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.smartAuto12Btn}
-                  onPress={applySmart12ExcludeSet}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.smartAuto12BtnTitle}>⚡ 12개 정밀 제외수 일괄 자동 적용</Text>
-                  <Text style={styles.smartAuto12BtnSub}>
-                    (2연속이월 + 10회과열 + 동끝수과밀 + 용지밀집라인 종합)
+            {/* [탭 1] 번호 수동 제외 및 4단계 추천 */}
+            {excludePopupTab === 'NUMBERS' ? (
+              <>
+                <View style={styles.excludeCountBar}>
+                  <Text style={styles.excludeCountText}>
+                    설정된 제외수: <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (권장: 10~15개)
                   </Text>
-                </TouchableOpacity>
 
-                <View style={styles.formulaStepGrid}>
                   <TouchableOpacity
-                    style={styles.formulaStepBtn}
-                    onPress={() => {
-                      const { step1DoubleCarry } = getExcludeAnalysisData();
-                      if (step1DoubleCarry.length === 0) {
-                        Alert.alert('알림', '직전 회차와 2주 전 연속 출현한 번호가 없습니다.');
-                        return;
-                      }
-                      const merged = Array.from(new Set([...excludedNumbers, ...step1DoubleCarry])).sort((a, b) => a - b);
-                      setExcludedNumbers(merged);
-                      Alert.alert('적용 완료', `2연속 출현 번호 (${step1DoubleCarry.join(', ')})가 제외수에 추가되었습니다.`);
-                    }}
-                    activeOpacity={0.75}
+                    style={[styles.bonusToggleBtn, includeBonusInExclude && styles.bonusToggleBtnActive]}
+                    onPress={() => setIncludeBonusInExclude((prev) => !prev)}
+                    activeOpacity={0.8}
                   >
-                    <Text style={styles.formulaStepBtnTitle}>1단계. 2연속 이월 제외</Text>
-                    <Text style={styles.formulaStepBtnSub}>
-                      ({recent3WeeksData.doubleCarryOver.length > 0 ? recent3WeeksData.doubleCarryOver.join(',') : '없음'})
+                    <Text style={[styles.bonusToggleBtnText, includeBonusInExclude && styles.bonusToggleBtnTextActive]}>
+                      보너스 {includeBonusInExclude ? '포함 ON' : '미포함'}
                     </Text>
                   </TouchableOpacity>
+                </View>
 
+                <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 480 }}>
+                  <View style={styles.smartFormulaPanel}>
+                    <View style={styles.smartFormulaHeaderRow}>
+                      <Text style={styles.smartFormulaTitle}>🎯 통계 공식 기반 추천 제외수 원터치 적용</Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.smartAuto12Btn}
+                      onPress={applySmart12ExcludeSet}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.smartAuto12BtnTitle}>⚡ 12개 정밀 제외수 일괄 자동 적용</Text>
+                      <Text style={styles.smartAuto12BtnSub}>
+                        (2연속이월 + 10회과열 + 동끝수과밀 + 용지밀집라인)
+                      </Text>
+                    </TouchableOpacity>
+
+                    <View style={styles.formulaStepGrid}>
+                      <TouchableOpacity
+                        style={styles.formulaStepBtn}
+                        onPress={() => {
+                          const { step1DoubleCarry } = getExcludeAnalysisData();
+                          if (step1DoubleCarry.length === 0) {
+                            Alert.alert('알림', '직전 회차와 2주 전 연속 출현한 번호가 없습니다.');
+                            return;
+                          }
+                          const merged = Array.from(new Set([...excludedNumbers, ...step1DoubleCarry])).sort((a, b) => a - b);
+                          setExcludedNumbers(merged);
+                          Alert.alert('적용 완료', `2연속 출현 번호 (${step1DoubleCarry.join(', ')})가 제외수에 추가되었습니다.`);
+                        }}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.formulaStepBtnTitle}>1단계. 2연속 이월 제외</Text>
+                        <Text style={styles.formulaStepBtnSub}>
+                          ({recent3WeeksData.doubleCarryOver.length > 0 ? recent3WeeksData.doubleCarryOver.join(',') : '없음'})
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.formulaStepBtn}
+                        onPress={() => {
+                          const { step2HotNumbers } = getExcludeAnalysisData();
+                          if (step2HotNumbers.length === 0) {
+                            Alert.alert('알림', '최근 10회 중 4회 이상 과열 출현한 번호가 없습니다.');
+                            return;
+                          }
+                          const merged = Array.from(new Set([...excludedNumbers, ...step2HotNumbers])).sort((a, b) => a - b);
+                          setExcludedNumbers(merged);
+                          Alert.alert('적용 완료', `10회 과열 번호 (${step2HotNumbers.join(', ')})가 제외수에 추가되었습니다.`);
+                        }}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.formulaStepBtnTitle}>2단계. 10회 과열수 제외</Text>
+                        <Text style={styles.formulaStepBtnSub}>(4회 이상 출현수)</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.formulaStepBtn}
+                        onPress={() => {
+                          const { step3CrowdedDigitNumbers } = getExcludeAnalysisData();
+                          if (step3CrowdedDigitNumbers.length === 0) {
+                            Alert.alert('알림', '직전 회차에 2개 이상 겹친 끝수가 없습니다.');
+                            return;
+                          }
+                          const merged = Array.from(new Set([...excludedNumbers, ...step3CrowdedDigitNumbers])).sort((a, b) => a - b);
+                          setExcludedNumbers(merged);
+                          Alert.alert('적용 완료', `직전 동끝수 과밀 번호 ${step3CrowdedDigitNumbers.length}개가 제외수에 추가되었습니다.`);
+                        }}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.formulaStepBtnTitle}>3단계. 직전 끝수과밀 제외</Text>
+                        <Text style={styles.formulaStepBtnSub}>(동일 끝수 쏠림)</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.formulaStepBtn}
+                        onPress={() => {
+                          const { step4CrowdedLineNumbers } = getExcludeAnalysisData();
+                          if (step4CrowdedLineNumbers.length === 0) {
+                            Alert.alert('알림', '직전 회차에 과밀하게 몰린 라인이 없습니다.');
+                            return;
+                          }
+                          const merged = Array.from(new Set([...excludedNumbers, ...step4CrowdedLineNumbers])).sort((a, b) => a - b);
+                          setExcludedNumbers(merged);
+                          Alert.alert('적용 완료', `직전 용지 과밀 라인 번호들이 제외수에 추가되었습니다.`);
+                        }}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.formulaStepBtnTitle}>4단계. 용지 과밀라인 제외</Text>
+                        <Text style={styles.formulaStepBtnSub}>(가로/세로 멸예상)</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {/* 1~45 전체 로또 볼 선택 영역 */}
+                  <View style={styles.excludeBallWrapper}>
+                    {allNumbers.map((num) => {
+                      const isExcluded = excludedNumbers.includes(num);
+
+                      return (
+                        <TouchableOpacity
+                          key={`ex-ball-${num}`}
+                          style={[
+                            styles.standardLottoBall,
+                            { backgroundColor: getBallColor(num) },
+                            isExcluded && styles.standardLottoBallExcluded,
+                          ]}
+                          onPress={() => toggleExcludeNumber(num)}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              styles.standardLottoBallText,
+                              isExcluded && styles.standardLottoBallTextExcluded,
+                            ]}
+                          >
+                            {num}
+                          </Text>
+
+                          {isExcluded && (
+                            <View style={styles.ballStrikeBadge}>
+                              <Text style={styles.ballStrikeX}>✕</Text>
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+
+                <View style={styles.excludePopupBtnRow}>
                   <TouchableOpacity
-                    style={styles.formulaStepBtn}
-                    onPress={() => {
-                      const { step2HotNumbers } = getExcludeAnalysisData();
-                      if (step2HotNumbers.length === 0) {
-                        Alert.alert('알림', '최근 10회 중 4회 이상 과열 출현한 번호가 없습니다.');
-                        return;
-                      }
-                      const merged = Array.from(new Set([...excludedNumbers, ...step2HotNumbers])).sort((a, b) => a - b);
-                      setExcludedNumbers(merged);
-                      Alert.alert('적용 완료', `10회 과열 번호 (${step2HotNumbers.join(', ')})가 제외수에 추가되었습니다.`);
-                    }}
-                    activeOpacity={0.75}
+                    style={styles.excludeConfirmOrangeBtn}
+                    onPress={() => setIsExcludeModalVisible(false)}
+                    activeOpacity={0.8}
                   >
-                    <Text style={styles.formulaStepBtnTitle}>2단계. 10회 과열수 제외</Text>
-                    <Text style={styles.formulaStepBtnSub}>(4회 이상 출현수)</Text>
+                    <Text style={styles.btnTextWhiteBold}>확인</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={styles.formulaStepBtn}
-                    onPress={() => {
-                      const { step3CrowdedDigitNumbers } = getExcludeAnalysisData();
-                      if (step3CrowdedDigitNumbers.length === 0) {
-                        Alert.alert('알림', '직전 회차에 2개 이상 겹친 끝수가 없습니다.');
-                        return;
-                      }
-                      const merged = Array.from(new Set([...excludedNumbers, ...step3CrowdedDigitNumbers])).sort((a, b) => a - b);
-                      setExcludedNumbers(merged);
-                      Alert.alert('적용 완료', `직전 동끝수 과밀 번호 ${step3CrowdedDigitNumbers.length}개가 제외수에 추가되었습니다.`);
-                    }}
-                    activeOpacity={0.75}
+                    style={styles.excludeInvertPurpleBtn}
+                    onPress={handleInvertExcludeNumbers}
+                    activeOpacity={0.8}
                   >
-                    <Text style={styles.formulaStepBtnTitle}>3단계. 직전 끝수과밀 제외</Text>
-                    <Text style={styles.formulaStepBtnSub}>(동일 끝수 쏠림)</Text>
+                    <Text style={styles.btnTextWhiteBold}>🔄 반전선택</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={styles.formulaStepBtn}
-                    onPress={() => {
-                      const { step4CrowdedLineNumbers } = getExcludeAnalysisData();
-                      if (step4CrowdedLineNumbers.length === 0) {
-                        Alert.alert('알림', '직전 회차에 과밀하게 몰린 라인이 없습니다.');
-                        return;
-                      }
-                      const merged = Array.from(new Set([...excludedNumbers, ...step4CrowdedLineNumbers])).sort((a, b) => a - b);
-                      setExcludedNumbers(merged);
-                      Alert.alert('적용 완료', `직전 용지 과밀 라인 번호들이 제외수에 추가되었습니다.`);
-                    }}
-                    activeOpacity={0.75}
+                    style={styles.excludeResetBlueBtn}
+                    onPress={() => setExcludedNumbers([])}
+                    activeOpacity={0.8}
                   >
-                    <Text style={styles.formulaStepBtnTitle}>4단계. 용지 과밀라인 제외</Text>
-                    <Text style={styles.formulaStepBtnSub}>(가로/세로 멸예상)</Text>
+                    <Text style={styles.btnTextWhiteBold}>전체해제</Text>
                   </TouchableOpacity>
                 </View>
-              </View>
+              </>
+            ) : (
+              /* [탭 2] 12대 필터 ON/OFF 직접 편집 패널 */
+              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 520, padding: 12 }}>
+                <Text style={styles.filterEditorGuide}>
+                  💡 번호 생성 시 적용할 필터 규칙을 직접 켜고 끌 수 있습니다.
+                </Text>
 
-              <View style={styles.quickExcludeRow}>
-                <TouchableOpacity
-                  style={styles.quickExcludeBtn}
-                  onPress={() => {
-                    const toEx = new Set(excludedNumbers);
-                    const d1 = getLottoNumbersByRound(latestRound);
-                    if (d1 && d1.numbers && !d1.isPending) {
-                      d1.numbers.forEach((n) => toEx.add(n));
-                      if (includeBonusInExclude && d1.bnusNo) toEx.add(d1.bnusNo);
-                    }
-                    setExcludedNumbers(Array.from(toEx).sort((a, b) => a - b));
-                    Alert.alert('적용 완료', '직전 1회차 번호가 제외수에 등록되었습니다.');
-                  }}
-                  activeOpacity={0.75}
-                >
-                  <Text style={styles.quickExcludeBtnText}>🚫 직전 1회차 번호 제외</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.quickExcludeBtn}
-                  onPress={() => {
-                    const toEx = new Set(excludedNumbers);
-                    [latestRound, latestRound - 1].forEach((r) => {
-                      const d = getLottoNumbersByRound(r);
-                      if (d && d.numbers && !d.isPending) {
-                        d.numbers.forEach((n) => toEx.add(n));
-                        if (includeBonusInExclude && d.bnusNo) toEx.add(d.bnusNo);
-                      }
-                    });
-                    setExcludedNumbers(Array.from(toEx).sort((a, b) => a - b));
-                    Alert.alert('적용 완료', '최근 2회차 번호가 제외수에 등록되었습니다.');
-                  }}
-                  activeOpacity={0.75}
-                >
-                  <Text style={styles.quickExcludeBtnText}>🚫 최근 2회차 번호 제외</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* 1~45 전체 로또 볼 선택 영역 */}
-              <View style={styles.excludeBallWrapper}>
-                {allNumbers.map((num) => {
-                  const isExcluded = excludedNumbers.includes(num);
-
-                  return (
-                    <TouchableOpacity
-                      key={`ex-ball-${num}`}
-                      style={[
-                        styles.standardLottoBall,
-                        { backgroundColor: getBallColor(num) },
-                        isExcluded && styles.standardLottoBallExcluded,
-                      ]}
-                      onPress={() => toggleExcludeNumber(num)}
-                      activeOpacity={0.7}
-                    >
-                      <Text
+                {/* 소수 최대 출현수 설정 제어 (1~4개 선택) */}
+                <View style={styles.primeSettingCard}>
+                  <Text style={styles.primeSettingTitle}>
+                    ⭐ 소수(1포함) 최대 허용 개수 설정 (현재: 1 ~ {maxPrimeCount}개)
+                  </Text>
+                  <View style={styles.primeCountButtonsRow}>
+                    {[2, 3, 4].map((cnt) => (
+                      <TouchableOpacity
+                        key={`prime-cnt-${cnt}`}
                         style={[
-                          styles.standardLottoBallText,
-                          isExcluded && styles.standardLottoBallTextExcluded,
+                          styles.primeCountBtn,
+                          maxPrimeCount === cnt && styles.primeCountBtnActive,
                         ]}
+                        onPress={() => setMaxPrimeCount(cnt)}
+                        activeOpacity={0.8}
                       >
-                        {num}
-                      </Text>
+                        <Text
+                          style={[
+                            styles.primeCountBtnText,
+                            maxPrimeCount === cnt && styles.primeCountBtnTextActive,
+                          ]}
+                        >
+                          최대 {cnt}개 {cnt === 3 ? '(추천)' : cnt === 4 ? '(확장)' : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
 
-                      {isExcluded && (
-                        <View style={styles.ballStrikeBadge}>
-                          <Text style={styles.ballStrikeX}>✕</Text>
+                {/* 12개 필터 스위치 리스트 */}
+                <View style={styles.filterSwitchList}>
+                  {[
+                    { key: 'usePrime', title: '1. 소수 출현수 제어', desc: `소수(1포함) 1 ~ ${maxPrimeCount}개 사이만 허용` },
+                    { key: 'useAC', title: '2. AC값 필터', desc: '산술적 복잡도 7 ~ 10 사이만 통과' },
+                    { key: 'useSum', title: '3. 총합 필터', desc: '번호 총합 100 ~ 180 사이만 통과' },
+                    { key: 'useOddEven', title: '4. 홀짝 비율 필터', desc: '홀짝 2:4, 3:3, 4:2 밸런스만 통과' },
+                    { key: 'useHighLow', title: '5. 고저 비율 필터', desc: '22 기준 고저 2:4, 3:3, 4:2만 통과' },
+                    { key: 'useMult3', title: '6. 3의 배수 필터', desc: '3의 배수 1 ~ 3개만 허용' },
+                    { key: 'useMult5', title: '7. 5의 배수 필터', desc: '5의 배수 최대 2개 허용 (3개 이상 차단)' },
+                    { key: 'useCarryOver', title: '8. 직전 이월수 필터', desc: '직전 당첨번호 최대 1개 허용 (2개 이상 차단)' },
+                    { key: 'useDoubleCarry', title: '9. 2연속 이월 차단', desc: '직전+2주전 연속 출현 번호 완전 차단' },
+                    { key: 'useConsecutive', title: '10. 연속번호(연번) 필터', desc: '3연번 차단 & 2연번 1쌍 이하만 허용' },
+                    { key: 'useSameEnd', title: '11. 동일 끝수 필터', desc: '같은 끝수 최대 2개 허용 (3개 이상 차단)' },
+                    { key: 'usePaperPattern', title: '12. 용지 마킹 멸 패턴', desc: '7×7 용지 기준 가로/세로 멸 2~4개 유지' },
+                  ].map((item, idx) => {
+                    const isEnabled = filterSettings[item.key];
+                    return (
+                      <View key={`filter-item-${idx}`} style={styles.filterSwitchRow}>
+                        <View style={{ flex: 1, paddingRight: 10 }}>
+                          <Text style={styles.filterSwitchTitle}>{item.title}</Text>
+                          <Text style={styles.filterSwitchDesc}>{item.desc}</Text>
                         </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
+                        <TouchableOpacity
+                          style={[
+                            styles.filterToggleSwitch,
+                            isEnabled ? styles.filterToggleSwitchOn : styles.filterToggleSwitchOff,
+                          ]}
+                          onPress={() => toggleFilterKey(item.key)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.filterToggleSwitchText}>
+                            {isEnabled ? 'ON' : 'OFF'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
 
-            <View style={styles.excludePopupBtnRow}>
-              <TouchableOpacity
-                style={styles.excludeConfirmOrangeBtn}
-                onPress={() => setIsExcludeModalVisible(false)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.btnTextWhiteBold}>확인</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.excludeInvertPurpleBtn}
-                onPress={handleInvertExcludeNumbers}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.btnTextWhiteBold}>🔄 반전선택</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.excludeResetBlueBtn}
-                onPress={() => setExcludedNumbers([])}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.btnTextWhiteBold}>제외해제</Text>
-              </TouchableOpacity>
-            </View>
+                <TouchableOpacity
+                  style={[styles.confirmBtn, { marginVertical: 14 }]}
+                  onPress={() => setIsExcludeModalVisible(false)}
+                >
+                  <Text style={styles.btnTextWhite}>필터 설정 완료 및 닫기</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>
@@ -2000,8 +2117,8 @@ export default function App() {
       >
         <View style={styles.centerModalOverlay}>
           <View style={styles.excludePopupBox}>
-            <View style={[styles.excludePopupHeader, { backgroundColor: '#0f172a' }]}>
-              <Text style={[styles.excludePopupTitle, { color: '#ffffff' }]}>직접 번호 생성</Text>
+            <View style={[styles.excludeHeaderBox, { backgroundColor: '#0f172a' }]}>
+              <Text style={[styles.excludeHeaderTitle, { color: '#ffffff' }]}>직접 번호 생성</Text>
               <TouchableOpacity
                 onPress={() => setIsManualModalVisible(false)}
                 style={styles.excludeCloseTouch}
@@ -2233,7 +2350,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 + 요청된 심층 지표 완벽 반영 */}
+      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -2358,7 +2475,6 @@ export default function App() {
 
             {analysisTargetData && (
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
-                {/* 6개 번호 볼 표시 바 */}
                 <View style={styles.analysisBallsCard}>
                   <View style={styles.analysisBallsRow}>
                     {analysisTargetData.numbers.map((n) => (
@@ -2377,14 +2493,13 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* [신규 핵심] 요청된 특수수 및 패턴 심층 분석 대시보드 카드 */}
+                {/* 특수수 및 핵심 패턴 심층 지표 카드 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🔍 특수수 및 핵심 패턴 심층 지표
                   </Text>
 
                   <View style={styles.detailMetricGrid}>
-                    {/* 1. 소수 / 합성수 */}
                     <View style={styles.detailMetricCard}>
                       <Text style={styles.detailMetricHeader}>소수 & 합성수 (1포함)</Text>
                       <Text style={styles.detailMetricValue}>
@@ -2395,7 +2510,6 @@ export default function App() {
                       </Text>
                     </View>
 
-                    {/* 2. 3의 배수 & 5의 배수 */}
                     <View style={styles.detailMetricCard}>
                       <Text style={styles.detailMetricHeader}>3의 배수 & 5의 배수</Text>
                       <Text style={styles.detailMetricValue}>
@@ -2406,7 +2520,6 @@ export default function App() {
                       </Text>
                     </View>
 
-                    {/* 3. 쌍둥이수 & 동일 끝수 */}
                     <View style={styles.detailMetricCard}>
                       <Text style={styles.detailMetricHeader}>쌍둥이수 (11,22,33,44)</Text>
                       <Text style={[styles.detailMetricValue, { color: analysisTargetData.twinNumbers.length > 0 ? '#7c3aed' : '#64748b' }]}>
@@ -2417,7 +2530,6 @@ export default function App() {
                       </Text>
                     </View>
 
-                    {/* 4. 동일 끝수 쌍 */}
                     <View style={styles.detailMetricCard}>
                       <Text style={styles.detailMetricHeader}>동일 끝수 중복 현황</Text>
                       <Text style={[styles.detailMetricValue, { color: analysisTargetData.sameEndPairs.length > 0 ? '#dc2626' : '#64748b' }]}>
@@ -2432,7 +2544,6 @@ export default function App() {
                       </Text>
                     </View>
 
-                    {/* 5. 연번(연속번호) 개수 */}
                     <View style={styles.detailMetricCardFull}>
                       <Text style={styles.detailMetricHeader}>연속번호(연번) 구성</Text>
                       <Text style={[styles.detailMetricValue, { color: analysisTargetData.consecutivePairsList.length > 0 ? '#2563eb' : '#64748b' }]}>
@@ -2442,7 +2553,6 @@ export default function App() {
                       </Text>
                     </View>
 
-                    {/* 6. 핫수(최단기) & 콜드수(최장기) */}
                     <View style={styles.detailMetricCardFull}>
                       <Text style={styles.detailMetricHeader}>🔥 핫수(최단기 출현) & ❄️ 콜드수(최장기 미출)</Text>
                       <View style={styles.hotColdRow}>
@@ -2589,7 +2699,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 5가지 핵심 지표 */}
+                {/* 5가지 기본 핵심 지표 */}
                 <View style={styles.metricGrid}>
                   <View style={styles.metricItem}>
                     <Text style={styles.metricLabel}>홀짝 비율</Text>
@@ -3000,6 +3110,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
   },
+
+  // 모달 기본 스타일
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.65)',
@@ -3014,6 +3126,25 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'android' ? 36 : 28,
     maxHeight: '94%',
   },
+
+  // 저장번호 전용 풀스크린 모달 스타일
+  fullScreenModalContainer: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  fullScreenModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
+  fullScreenScroll: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -3045,6 +3176,7 @@ const styles = StyleSheet.create({
   },
   closeBtn: { padding: 6 },
   closeBtnText: { fontSize: 18, color: '#94a3b8', fontWeight: 'bold' },
+
   analysisNavSubBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -3082,6 +3214,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#0f172a',
   },
+
   manualTopOptionBtn: {
     backgroundColor: '#0f172a',
     paddingVertical: 10,
@@ -3146,6 +3279,7 @@ const styles = StyleSheet.create({
   },
   btnTextWhite: { color: '#ffffff', fontWeight: '800', fontSize: 14 },
   btnTextWhiteBold: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
+
   exportButtonGroup: {
     flexDirection: 'row',
     gap: 8,
@@ -3193,6 +3327,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
+
   centerModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.72)',
@@ -3206,6 +3341,41 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: 'hidden',
     elevation: 10,
+  },
+
+  // 제외수 팝업 탭 바
+  excludeTabRow: {
+    flexDirection: 'row',
+    backgroundColor: '#e2e8f0',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  excludeTabItem: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  excludeTabItemActive: {
+    backgroundColor: '#fee2e2',
+    borderBottomWidth: 3,
+    borderBottomColor: '#dc2626',
+  },
+  excludeTabItemActiveFilter: {
+    backgroundColor: '#eff6ff',
+    borderBottomWidth: 3,
+    borderBottomColor: '#2563eb',
+  },
+  excludeTabItemText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#64748b',
+  },
+  excludeTabItemTextActive: {
+    color: '#b91c1c',
+  },
+  excludeTabItemTextActiveFilter: {
+    color: '#1d4ed8',
   },
   excludeHeaderBox: {
     backgroundColor: '#d1d5db',
@@ -3222,9 +3392,7 @@ const styles = StyleSheet.create({
     color: '#1e293b',
   },
   excludeCloseTouch: {
-    position: 'absolute',
-    right: 14,
-    padding: 4,
+    paddingHorizontal: 12,
   },
   excludeCloseX: {
     fontSize: 20,
@@ -3267,6 +3435,97 @@ const styles = StyleSheet.create({
   },
   bonusToggleBtnTextActive: {
     color: '#ffffff',
+  },
+
+  // 12대 필터 ON/OFF 편집 스타일
+  filterEditorGuide: {
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  primeSettingCard: {
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+  },
+  primeSettingTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#15803d',
+    marginBottom: 8,
+  },
+  primeCountButtonsRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  primeCountBtn: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#86efac',
+    paddingVertical: 6,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  primeCountBtnActive: {
+    backgroundColor: '#15803d',
+    borderColor: '#166534',
+  },
+  primeCountBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  primeCountBtnTextActive: {
+    color: '#ffffff',
+  },
+
+  filterSwitchList: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 8,
+  },
+  filterSwitchRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#cbd5e1',
+  },
+  filterSwitchTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  filterSwitchDesc: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  filterToggleSwitch: {
+    width: 50,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterToggleSwitchOn: {
+    backgroundColor: '#2563eb',
+  },
+  filterToggleSwitchOff: {
+    backgroundColor: '#cbd5e1',
+  },
+  filterToggleSwitchText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
   },
 
   smartFormulaPanel: {
@@ -3331,28 +3590,6 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginTop: 1,
     fontWeight: '600',
-  },
-
-  quickExcludeRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    gap: 6,
-  },
-  quickExcludeBtn: {
-    flex: 1,
-    backgroundColor: '#fee2e2',
-    borderWidth: 1,
-    borderColor: '#fca5a5',
-    paddingVertical: 6,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickExcludeBtnText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#b91c1c',
   },
 
   excludeBallWrapper: {
@@ -3845,7 +4082,6 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
   },
 
-  // 신규 특수수 & 패턴 심층 분석 카드 스타일
   detailMetricGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
