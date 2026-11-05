@@ -116,13 +116,13 @@ const isValidConsecutiveFilter = (sorted) => {
   for (let i = 0; i < sorted.length - 1; i++) {
     if (sorted[i + 1] - sorted[i] === 1) {
       if (i < sorted.length - 2 && sorted[i + 2] - sorted[i + 1] === 1) {
-        return false; // 3연속 이상 즉시 탈락
+        return false;
       }
       consecutivePairCount++;
       i++;
     }
   }
-  return consecutivePairCount <= 1; // 0쌍 또는 2연속 1쌍만 통과
+  return consecutivePairCount <= 1;
 };
 
 const isValidLastDigitFilter = (numbers) => {
@@ -130,7 +130,7 @@ const isValidLastDigitFilter = (numbers) => {
   for (const n of numbers) {
     const digit = n % 10;
     counts[digit] = (counts[digit] || 0) + 1;
-    if (counts[digit] >= 3) return false; // 동일 끝수 3개 이상 금지
+    if (counts[digit] >= 3) return false;
   }
   return true;
 };
@@ -247,6 +247,9 @@ export default function App() {
 
   const [winningTopRound, setWinningTopRound] = useState(INITIAL_LATEST_ROUND);
   const [searchRoundInput, setSearchRoundInput] = useState('');
+
+  // 저장된 총 번호(게임) 개수 계산
+  const totalSavedGamesCount = savedSets.reduce((sum, item) => sum + (item.games?.length || 0), 0);
 
   const displayed15Rounds = Array.from({ length: 15 }, (_, i) => winningTopRound - i).filter((r) => r >= 1);
   const bottomRound = displayed15Rounds.length > 0 ? displayed15Rounds[displayed15Rounds.length - 1] : winningTopRound;
@@ -1285,6 +1288,12 @@ export default function App() {
     Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
   };
 
+  // 네이버 "로또645 1등판매점" 검색 링크 이동
+  const openInNaverSearch = (round = null) => {
+    const query = round ? `로또645 ${round}회 1등판매점` : '로또645 1등판매점';
+    Linking.openURL(`https://m.search.naver.com/search.naver?query=${encodeURIComponent(query)}`);
+  };
+
   const changeStoreRound = (offset) => {
     const nextRound = storeRound + offset;
     if (nextRound > latestRound || nextRound < 1) return;
@@ -1344,6 +1353,7 @@ export default function App() {
 
         <View style={styles.menuGridContainer}>
           <View style={styles.menuGridRow}>
+            {/* 1. 당첨번호 조회 */}
             <TouchableOpacity
               style={styles.menuGridItem}
               onPress={() => {
@@ -1352,6 +1362,7 @@ export default function App() {
               }}
               activeOpacity={0.6}
             />
+            {/* 2. 제외수 설정 */}
             <TouchableOpacity
               style={styles.menuGridItem}
               onPress={() => setIsExcludeModalVisible(true)}
@@ -1360,11 +1371,22 @@ export default function App() {
           </View>
 
           <View style={styles.menuGridRow}>
+            {/* 3. 저장된 번호 보관함 (우측 상단 실시간 카운터 배지 장착) */}
             <TouchableOpacity
               style={styles.menuGridItem}
               onPress={() => setIsSavedModalVisible(true)}
               activeOpacity={0.6}
-            />
+            >
+              {totalSavedGamesCount > 0 && (
+                <View style={styles.mainBadgeCounter}>
+                  <Text style={styles.mainBadgeCounterText}>
+                    {totalSavedGamesCount > 99 ? '99+' : totalSavedGamesCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
+            {/* 4. QR 스캔 */}
             <TouchableOpacity
               style={styles.menuGridItem}
               onPress={handleOpenQrScanner}
@@ -1396,6 +1418,15 @@ export default function App() {
               <Text style={styles.backButtonArrow}>←</Text>
               <Text style={styles.storeTopNavTitle}>당첨판매점</Text>
             </TouchableOpacity>
+
+            {/* 네이버 검색 바로가기 버튼 */}
+            <TouchableOpacity
+              style={styles.naverDirectBtn}
+              onPress={() => openInNaverSearch(storeRound)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.naverDirectBtnText}>🔍 네이버 검색</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.storeRoundSubBar}>
@@ -1420,6 +1451,17 @@ export default function App() {
               </TouchableOpacity>
             </View>
           </View>
+
+          {/* 네이버 공식 검색 배너 */}
+          <TouchableOpacity
+            style={styles.naverSearchBanner}
+            onPress={() => openInNaverSearch(storeRound)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.naverSearchBannerText}>
+              🟢 네이버에서 <Text style={{ textDecorationLine: 'underline', fontWeight: '900' }}>'로또645 {storeRound}회 1등판매점'</Text> 실시간 확인 ➔
+            </Text>
+          </TouchableOpacity>
 
           <View style={styles.storeSearchBarRow}>
             <TextInput
@@ -1604,7 +1646,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 3] 저장한 번호 목록 모달 */}
+      {/* [모달 3] 저장한 번호 목록 모달 (우측 상단 카운터 배지 포함) */}
       <Modal
         visible={isSavedModalVisible}
         animationType="slide"
@@ -1614,14 +1656,20 @@ export default function App() {
         <View style={styles.modalOverlay}>
           <View style={styles.bottomModalContainer}>
             <View style={styles.modalHeader}>
-              <View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Text style={styles.modalTitle}>📂 내가 저장한 번호 목록</Text>
-                <Text style={styles.modalSubtitle}>최신 제{latestRound}회 결과 및 누적 당첨 분석</Text>
+                <View style={styles.savedModalCounterBadge}>
+                  <Text style={styles.savedModalCounterBadgeText}>총 {totalSavedGamesCount}개</Text>
+                </View>
               </View>
               <TouchableOpacity onPress={() => setIsSavedModalVisible(false)} style={styles.closeBtn}>
                 <Text style={styles.closeBtnText}>✕</Text>
               </TouchableOpacity>
             </View>
+
+            <Text style={[styles.modalSubtitle, { marginBottom: 10 }]}>
+              최신 제{latestRound}회 결과 및 누적 당첨 분석
+            </Text>
 
             <View style={styles.exportButtonGroup}>
               <TouchableOpacity style={styles.exportPdfBtn} onPress={handleExportPDF} activeOpacity={0.8}>
@@ -2649,7 +2697,50 @@ const styles = StyleSheet.create({
     width: '48%',
     height: '100%',
     borderRadius: 20,
+    position: 'relative',
   },
+
+  // 메인 화면 보관함 버튼 우측 상단 카운터 배지
+  mainBadgeCounter: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#dc2626',
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+  },
+  mainBadgeCounterText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+
+  // 저장목록 모달 헤더 카운터 배지
+  savedModalCounterBadge: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  savedModalCounterBadgeText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
   storeMapContainer: {
     flex: 1,
     backgroundColor: '#ffffff',
@@ -2658,6 +2749,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#5ea89b',
     paddingVertical: 12,
     paddingHorizontal: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   backButtonTouch: {
     flexDirection: 'row',
@@ -2674,6 +2768,33 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: 'bold',
   },
+
+  // 네이버 검색 버튼 및 배너
+  naverDirectBtn: {
+    backgroundColor: '#03c75a',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  naverDirectBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  naverSearchBanner: {
+    backgroundColor: '#f0fdf4',
+    borderBottomWidth: 1,
+    borderBottomColor: '#bbf7d0',
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+  },
+  naverSearchBannerText: {
+    fontSize: 12,
+    color: '#15803d',
+    fontWeight: '700',
+  },
+
   storeRoundSubBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2819,7 +2940,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   modalTitle: {
     fontSize: 18,
