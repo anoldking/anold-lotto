@@ -134,7 +134,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
   const minNum = sorted[0];
   const maxNum = sorted[5];
 
-  // 기본 간격 & 고저차
   if (minNum > 15 || maxNum < 30) return false;
   const range = maxNum - minNum;
   if (range < 25 || range > 44) return false;
@@ -146,55 +145,46 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
   }
   if (maxAdjacentDiff < 6 || maxAdjacentDiff > 25) return false;
 
-  // 1. 번호 총합 필터 (100 ~ 180)
   if (filters.useSum) {
     const sum = sorted.reduce((acc, cur) => acc + cur, 0);
     if (sum < 100 || sum > 180) return false;
   }
 
-  // 2. 홀짝 비율 필터 (2:4, 3:3, 4:2)
   if (filters.useOddEven) {
     const oddCount = sorted.filter((n) => n % 2 !== 0).length;
     if (oddCount < 2 || oddCount > 4) return false;
   }
 
-  // 3. 고저 비율 필터 (22 기준 2:4, 3:3, 4:2)
   if (filters.useHighLow) {
     const lowCount = sorted.filter((n) => n <= 22).length;
     if (lowCount < 2 || lowCount > 4) return false;
   }
 
-  // 4. AC값 필터 (7 ~ 10)
   if (filters.useAC) {
     const ac = calculateACValue(sorted);
     if (ac < 7 || ac > 10) return false;
   }
 
-  // 5. 소수 개수 필터 (소수 1~maxPrimeLimit개)
   if (filters.usePrime) {
     const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
     if (primeCount < 1 || primeCount > maxPrimeLimit) return false;
   }
 
-  // 6. 3의 배수 필터 (1 ~ 3개)
   if (filters.useMult3) {
     const mult3Count = sorted.filter((n) => n % 3 === 0).length;
     if (mult3Count < 1 || mult3Count > 3) return false;
   }
 
-  // 7. 5의 배수 필터 (최대 2개 허용, 3개 이상 차단)
   if (filters.useMult5) {
     const mult5Count = sorted.filter((n) => n % 5 === 0).length;
     if (mult5Count >= 3) return false;
   }
 
-  // 8. 쌍둥이수 필터 (최대 1개 허용, 2개 이상 차단)
   if (filters.useTwin) {
     const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
     if (twinCount >= 2) return false;
   }
 
-  // 9. 동일 끝수 필터 (3개 이상 차단)
   if (filters.useSameEnd) {
     const lastDigitCounts = {};
     for (const n of sorted) {
@@ -204,7 +194,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
     }
   }
 
-  // 10. 연속번호 필터 (3연번 차단 & 2연번 1쌍 이하)
   if (filters.useConsecutive) {
     let consecutivePairs = 0;
     for (let i = 0; i < sorted.length - 1; i++) {
@@ -219,7 +208,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
     if (consecutivePairs > 1) return false;
   }
 
-  // 11. 10단위 구간 멸 필터 (1~2개 멸)
   if (filters.useSectionDead) {
     const sectionCounts = [0, 0, 0, 0, 0];
     sorted.forEach((n) => {
@@ -233,14 +221,12 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
     if (deadSections < 1 || deadSections > 2) return false;
   }
 
-  // 12. 용지 마킹 멸 패턴 (가로 멸 2~4개 & 세로 멸 2~4개)
   if (filters.usePaperPattern) {
     const { deadRows, deadCols } = getPaperDeadPattern(sorted);
     if (deadRows < 2 || deadRows > 4) return false;
     if (deadCols < 2 || deadCols > 4) return false;
   }
 
-  // 이월수 조건 검증 (최신 회차 기준)
   if (dynamicContext) {
     const { round1Numbers, doubleCarryOver } = dynamicContext;
 
@@ -306,13 +292,11 @@ export default function App() {
   const [generationTitle, setGenerationTitle] = useState('🎉 번호 추첨 완료');
   const [activeGenOption, setActiveGenOption] = useState('OPT_STRICT');
 
-  // 제외수 전용 상태
   const [excludedNumbers, setExcludedNumbers] = useState([]);
   const [includeBonusInExclude, setIncludeBonusInExclude] = useState(false);
   const [excludeAnalysisRounds, setExcludeAnalysisRounds] = useState(10);
   const [excludePopupTab, setExcludePopupTab] = useState('NUMBERS');
 
-  // 12대 필터 ON/OFF 상태
   const [filterSettings, setFilterSettings] = useState({
     useAC: true,
     useSum: true,
@@ -331,7 +315,6 @@ export default function App() {
 
   const [maxPrimeCount, setMaxPrimeCount] = useState(3);
 
-  // 용지 마킹 패턴표 토글: [🔴 이번주], [🔵 1주 전], [🟢 2주 전] (최신 회차 기준)
   const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
   const [showPattern1WeekAgo, setShowPattern1WeekAgo] = useState(false);
   const [showPattern2WeeksAgo, setShowPattern2WeeksAgo] = useState(false);
@@ -363,7 +346,6 @@ export default function App() {
   const displayed15Rounds = Array.from({ length: 15 }, (_, i) => winningTopRound - i).filter((r) => r >= 1);
   const bottomRound = displayed15Rounds.length > 0 ? displayed15Rounds[displayed15Rounds.length - 1] : winningTopRound;
 
-  // ================= [1차 / 2차 통합 수신 모듈] =================
   const fetchLottoRoundWithFallback = async (drwNo) => {
     const cacheBuster = `?t=${Date.now()}`;
 
@@ -502,7 +484,6 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
-  // 최신 회차(latestRound) 기준 동적 통계 데이터 생성
   const getDynamicContextData = useCallback(() => {
     const round1 = getLottoNumbersByRound(latestRound);
     const round2 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1) : null;
@@ -518,7 +499,6 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
-  // 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -546,7 +526,6 @@ export default function App() {
     }));
   };
 
-  // 최신 회차(latestRound) 포함 기준 N주간 M회 이상 출현한 번호 계산
   const getOverheatedNumbers = useCallback(
     (weekCount, minOccurrences) => {
       const counts = {};
@@ -572,7 +551,6 @@ export default function App() {
     [latestRound, includeBonusInExclude, getLottoNumbersByRound]
   );
 
-  // 최신 회차(latestRound) 포함 기준 N주간 미출현 번호 계산
   const getColdNumbers = useCallback(
     (weekCount) => {
       const appearedSet = new Set();
@@ -698,7 +676,6 @@ export default function App() {
     Alert.alert('스마트 추천 제외수 적용', `총 ${finalResult.length}개 추천 번호가 제외수로 설정되었습니다.\n\n번호: ${finalResult.join(', ')}`);
   };
 
-  // ================= [공용 정밀 분석 데이터 생성기 (최신 당첨번호 최우선 기준)] =================
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -706,7 +683,6 @@ export default function App() {
       const nums = [...targetNumbers].sort((a, b) => a - b);
       const numSet = new Set(nums);
 
-      // 누적 등수별 당첨 횟수 (1회부터 최신 회차 latestRound까지)
       let rank3Count = 0;
       let rank4Count = 0;
       let rank5Count = 0;
@@ -726,8 +702,6 @@ export default function App() {
       const lowCount = nums.filter((n) => n <= 22).length;
       const highCount = 6 - lowCount;
 
-      // [핵심 변경] 이월수/일치수 기준: 항상 가장 최근 공식 당첨번호(latestRound)와 비교!
-      // 만약 대상이 최신 회차(latestRound) 당첨번호 그 자체라면, 직전(latestRound - 1) 회차와의 이월수를 계산
       let carryOverNumbers = [];
       const latestOfficialData = getLottoNumbersByRound(latestRound);
 
@@ -738,12 +712,10 @@ export default function App() {
             carryOverNumbers = nums.filter((n) => prevRoundData.numbers.includes(n));
           }
         } else {
-          // 저장번호 및 과거 회차 당첨번호 모두 최신 당첨번호(latestRound)와 겹치는 번호를 이월수로 표시
           carryOverNumbers = nums.filter((n) => latestOfficialData.numbers.includes(n));
         }
       }
 
-      // [핵심 변경] 최근 30회 출현 빈도: 항상 최신 회차(latestRound) 기준 최근 30회 집계
       const recent30Counts = {};
       nums.forEach((n) => (recent30Counts[n] = 0));
       const startR = Math.max(1, latestRound - 30);
@@ -758,7 +730,6 @@ export default function App() {
         }
       }
 
-      // [핵심 변경] 미출현 주기(핫수/콜드수): 항상 최신 회차(latestRound) 기준으로 역산 계산
       const absenceWeeks = {};
       nums.forEach((n) => {
         let count = 0;
@@ -798,7 +769,6 @@ export default function App() {
       const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 3);
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
-      // [핵심 변경] 용지 마킹 비교 주차: 항상 최신 공식 회차(latestRound) 기준 이번주/1주전/2주전 고정
       const numbersThisWeek = getLottoNumbersByRound(latestRound)?.numbers || [];
       const numbers1WeekAgo = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : [];
       const numbers2WeeksAgo = latestRound > 2 ? getLottoNumbersByRound(latestRound - 2)?.numbers || [] : [];
@@ -824,7 +794,6 @@ export default function App() {
         }
       }
 
-      // 최신 회차 기준 핫수(가장 최근에 출현/미출 텀 최소) & 콜드수(가장 오랫동안 미출/미출 텀 최대)
       const minAbsenceVal = Math.min(...nums.map((n) => absenceWeeks[n]));
       const hotNumbersInSet = nums.filter((n) => absenceWeeks[n] === minAbsenceVal);
 
@@ -838,7 +807,7 @@ export default function App() {
         subText,
         sourceType,
         sourceIndex,
-        baseRound: latestRound, // 항상 최신 회차 기준
+        baseRound: latestRound,
         numbersThisWeek,
         numbers1WeekAgo,
         numbers2WeeksAgo,
@@ -909,7 +878,7 @@ export default function App() {
       roundData.numbers,
       targetRound,
       `제 ${targetRound}회 당첨번호 정밀 분석`,
-      `제${latestRound}회 최신 공식 기준 심층 데이터 분석`,
+      `최신 제${latestRound}회 공식 기준 심층 데이터 분석`,
       roundData.bnusNo,
       'WINNING',
       targetRound
@@ -1875,7 +1844,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 4] 스마트 제외수 전용 설정 모달 */}
+      {/* [모달 4] 제외수 & 12대 필터 ON/OFF 직접 편집 팝업 모달 */}
       <Modal
         visible={isExcludeModalVisible}
         animationType="fade"
@@ -1933,7 +1902,7 @@ export default function App() {
                 </View>
 
                 <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 480 }}>
-                  {/* [수정 기능] 최근 포함 기준 4단계 과열수 & 20주/30주 미출현 번호 제외 패널 */}
+                  {/* 최근 포함 기준 4단계 과열수 & 20주/30주 미출현 번호 제외 패널 */}
                   <View style={styles.overheatedSectionBox}>
                     <Text style={styles.overheatedSectionTitle}>
                       🔥 최근 포함 기준 과열 출현 번호 (터치 시 제외 등록):
@@ -2326,15 +2295,15 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 6] 전회차 당첨결과 모달 */}
+      {/* [모달 6] 전회차 당첨결과 모달 (전체화면 적용 - 하단 메인 화면 노출 완전 차단) */}
       <Modal
         visible={isWinningModalVisible}
         animationType="slide"
-        transparent={true}
+        transparent={false}
         onRequestClose={() => setIsWinningModalVisible(false)}
       >
-        <View style={styles.bottomModalContainer}>
-          <View style={styles.modalHeader}>
+        <SafeAreaView style={styles.fullScreenModalContainer}>
+          <View style={styles.fullScreenModalHeader}>
             <View>
               <Text style={styles.modalTitle}>🎉 당첨번호 조회 (공식 15줄)</Text>
               <Text style={styles.modalSubtitle}>실시간 자동 폴백 & 로컬 캐싱 지원</Text>
@@ -2367,7 +2336,7 @@ export default function App() {
             </View>
           </View>
 
-          <View style={styles.searchRow}>
+          <View style={[styles.searchRow, { marginHorizontal: 16 }]}>
             <TextInput
               style={styles.searchInput}
               placeholder="기준 회차 입력 (예: 1160, 1000)"
@@ -2381,7 +2350,7 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.roundBar}>
+          <View style={[styles.roundBar, { marginHorizontal: 16 }]}>
             <TouchableOpacity
               onPress={() => setWinningTopRound((prev) => Math.max(15, prev - 15))}
               disabled={bottomRound <= 1}
@@ -2408,7 +2377,7 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.winning15Scroll} showsVerticalScrollIndicator={true}>
+          <ScrollView style={styles.fullScreenScroll} showsVerticalScrollIndicator={true}>
             {displayed15Rounds.map((r) => {
               const roundData = getLottoNumbersByRound(r);
 
@@ -2478,10 +2447,12 @@ export default function App() {
             })}
           </ScrollView>
 
-          <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsWinningModalVisible(false)}>
-            <Text style={styles.btnTextWhite}>닫기</Text>
-          </TouchableOpacity>
-        </View>
+          <View style={{ padding: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' }}>
+            <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsWinningModalVisible(false)}>
+              <Text style={styles.btnTextWhite}>닫기</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
       </Modal>
 
       {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 */}
@@ -3260,6 +3231,7 @@ const styles = StyleSheet.create({
     maxHeight: '94%',
   },
 
+  // 전체화면 전용 스타일
   fullScreenModalContainer: {
     flex: 1,
     backgroundColor: '#ffffff',
@@ -4789,7 +4761,7 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   winning15Scroll: {
-    maxHeight: 380,
+    flex: 1,
     marginVertical: 4,
   },
 });
