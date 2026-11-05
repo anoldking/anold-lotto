@@ -78,7 +78,7 @@ const getBallColor = (number) => {
   return '#22c55e';
 };
 
-// 고정수 및 제외수를 모두 반영한 기본 무작위 번호 생성기
+// 고정수 및 제외수를 모두 반영한 번호 생성기
 const generateBasicLottoSet = (excludedNumbers = [], fixedNumbers = []) => {
   const selected = new Set(fixedNumbers);
   const pool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
@@ -133,7 +133,6 @@ const calculateACValue = (sorted) => {
   return diffs.size - (sorted.length - 1);
 };
 
-// 7x7 용지 마킹 기준 가로멸 / 세로멸 구간 계산 함수
 const getPaperDeadPattern = (numbers) => {
   const rowCounts = [0, 0, 0, 0, 0, 0, 0];
   const colCounts = [0, 0, 0, 0, 0, 0, 0];
@@ -151,13 +150,11 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 직전회차와 2주전 회차에 연속 출현한 번호 포함 여부 체크
 const hasDoubleConsecutiveCarryOver = (candidate, doubleCarryOverNumbers = []) => {
   if (!doubleCarryOverNumbers || doubleCarryOverNumbers.length === 0) return false;
   return candidate.some((n) => doubleCarryOverNumbers.includes(n));
 };
 
-// 조건: 합 115~179, 홀짝 0/6 배제, AC>=7, 2연속이월 배제, 가로멸 2~4개 & 세로멸 2~4개
 const isStrictStatisticallyValid = (numbers, doubleCarryOverNumbers = []) => {
   const sum = numbers.reduce((acc, cur) => acc + cur, 0);
   if (sum < 115 || sum >= 180) return false;
@@ -169,10 +166,8 @@ const isStrictStatisticallyValid = (numbers, doubleCarryOverNumbers = []) => {
   if (!isValidLastDigitFilter(numbers)) return false;
   if (calculateACValue(numbers) <= 6) return false;
 
-  // 연속 2회 이상 이월수 제외
   if (hasDoubleConsecutiveCarryOver(numbers, doubleCarryOverNumbers)) return false;
 
-  // 로또 용지 마킹 패턴: 가로멸구간 2~4개 / 세로멸구간 2~4개
   const { deadRows, deadCols } = getPaperDeadPattern(numbers);
   if (deadRows < 2 || deadRows > 4) return false;
   if (deadCols < 2 || deadCols > 4) return false;
@@ -241,10 +236,10 @@ export default function App() {
   const [selectedFixedPresetKey, setSelectedFixedPresetKey] = useState(null);
   const [presetFixedMatchedNumbers, setPresetFixedMatchedNumbers] = useState([]);
 
-  // 용지 마킹 패턴표 옵션 토글 상태 (직전주, 2주전, 3주전)
-  const [showPatternRound1, setShowPatternRound1] = useState(false);
-  const [showPatternRound2, setShowPatternRound2] = useState(false);
-  const [showPatternRound3, setShowPatternRound3] = useState(false);
+  // 용지 마킹 패턴표 옵션 토글 상태: [🔴 이번주], [🔵 1주 전], [🟢 2주 전]
+  const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
+  const [showPattern1WeekAgo, setShowPattern1WeekAgo] = useState(false);
+  const [showPattern2WeeksAgo, setShowPattern2WeeksAgo] = useState(false);
 
   const [manualSelectedNumbers, setManualSelectedNumbers] = useState([]);
   const [isManualModalVisible, setIsManualModalVisible] = useState(false);
@@ -412,7 +407,6 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
-  // 최근 3주간 당첨 데이터 및 2연속 이월수 계산
   const getRecent3WeeksCarryOverData = useCallback(() => {
     const round1 = getLottoNumbersByRound(latestRound);
     const round2 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1) : null;
@@ -450,7 +444,6 @@ export default function App() {
     [latestRound, getLottoNumbersByRound]
   );
 
-  // 통계 정밀 필터 (연속 2회 이상 이월수 제외 + 가로멸 2~4개 / 세로멸 2~4개 패턴)
   const generateStrictFilteredSet = useCallback(
     (excluded = [], fixed = []) => {
       const { doubleCarryOver } = getRecent3WeeksCarryOverData();
@@ -517,7 +510,7 @@ export default function App() {
     }
   };
 
-  // 공용 정밀 분석 데이터 생성기 (마킹 패턴표에서 보너스 제외 처리)
+  // 공용 정밀 분석 데이터 생성기 (보너스 번호 표시 제외)
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -607,10 +600,13 @@ export default function App() {
       // 용지 마킹 패턴 계산 (보너스 번호 제외, 순수 6개 번호 기준)
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
+      // [이번주 / 1주 전 / 2주 전] 번호 데이터 추출
+      // 당첨번호 분석: 분석 회차가 '이번주', 그 전 회차가 '1주 전', 2회차 전이 '2주 전'
+      // 저장번호 분석: 최신 공식 회차가 '이번주', 그 전 회차가 '1주 전', 2회차 전이 '2주 전'
       const targetBaseRound = sourceType === 'WINNING' ? baseRound : latestRound;
-      const prev1 = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
-      const prev2 = targetBaseRound > 2 ? getLottoNumbersByRound(targetBaseRound - 2)?.numbers || [] : [];
-      const prev3 = targetBaseRound > 3 ? getLottoNumbersByRound(targetBaseRound - 3)?.numbers || [] : [];
+      const numbersThisWeek = getLottoNumbersByRound(targetBaseRound)?.numbers || [];
+      const numbers1WeekAgo = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
+      const numbers2WeeksAgo = targetBaseRound > 2 ? getLottoNumbersByRound(targetBaseRound - 2)?.numbers || [] : [];
 
       return {
         numbers: nums,
@@ -620,9 +616,9 @@ export default function App() {
         sourceType,
         sourceIndex,
         baseRound: targetBaseRound,
-        prev1,
-        prev2,
-        prev3,
+        numbersThisWeek,
+        numbers1WeekAgo,
+        numbers2WeeksAgo,
         rank3Count,
         rank4Count,
         rank5Count,
@@ -2505,7 +2501,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 + 용지 패턴표 (보너스 삭제 & 1/2/3주전 마킹 토글) */}
+      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 + 용지 패턴표 (보너스 삭제 & 이번주/1주전/2주전 마킹 토글) */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -2649,48 +2645,48 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 로또 용지 마킹 패턴 분석표 (7x7 SLIP) - 보너스 번호 삭제 & 1/2/3주전 마킹 토글 */}
+                {/* 로또 용지 마킹 패턴표 (7x7 SLIP) - 보너스 번호 삭제 & 이번주/1주전/2주전 마킹 토글 */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
                       📋 로또 용지 마킹 패턴표 (7×7 SLIP)
                     </Text>
                     <Text style={styles.slipSubDesc}>
-                      순수 6개 번호 마킹 기준 및 최근 주차 비교
+                      순수 6개 번호 마킹 기준 및 최근 주차 비교 (보너스 제외)
                     </Text>
                   </View>
 
-                  {/* 최근 1회, 2주전, 3주전 마킹 표시 토글 버튼 바 */}
+                  {/* [🔴 이번주], [🔵 1주 전], [🟢 2주 전] 마킹 표시 토글 버튼 바 */}
                   <View style={styles.patternToggleControlRow}>
                     <Text style={styles.patternToggleControlLabel}>주차 비교:</Text>
 
                     <TouchableOpacity
-                      style={[styles.patternToggleBtn, showPatternRound1 && styles.patternToggleBtn1Active]}
-                      onPress={() => setShowPatternRound1((prev) => !prev)}
+                      style={[styles.patternToggleBtn, showPatternThisWeek && styles.patternToggleBtn1Active]}
+                      onPress={() => setShowPatternThisWeek((prev) => !prev)}
                       activeOpacity={0.75}
                     >
-                      <Text style={[styles.patternToggleBtnText, showPatternRound1 && styles.patternToggleBtnTextActive]}>
-                        🔴 직전 1회 {showPatternRound1 ? 'ON' : 'OFF'}
+                      <Text style={[styles.patternToggleBtnText, showPatternThisWeek && styles.patternToggleBtnTextActive]}>
+                        🔴 이번주 {showPatternThisWeek ? 'ON' : 'OFF'}
                       </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.patternToggleBtn, showPatternRound2 && styles.patternToggleBtn2Active]}
-                      onPress={() => setShowPatternRound2((prev) => !prev)}
+                      style={[styles.patternToggleBtn, showPattern1WeekAgo && styles.patternToggleBtn2Active]}
+                      onPress={() => setShowPattern1WeekAgo((prev) => !prev)}
                       activeOpacity={0.75}
                     >
-                      <Text style={[styles.patternToggleBtnText, showPatternRound2 && styles.patternToggleBtnTextActive]}>
-                        🔵 2주 전 {showPatternRound2 ? 'ON' : 'OFF'}
+                      <Text style={[styles.patternToggleBtnText, showPattern1WeekAgo && styles.patternToggleBtnTextActive]}>
+                        🔵 1주 전 {showPattern1WeekAgo ? 'ON' : 'OFF'}
                       </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.patternToggleBtn, showPatternRound3 && styles.patternToggleBtn3Active]}
-                      onPress={() => setShowPatternRound3((prev) => !prev)}
+                      style={[styles.patternToggleBtn, showPattern2WeeksAgo && styles.patternToggleBtn3Active]}
+                      onPress={() => setShowPattern2WeeksAgo((prev) => !prev)}
                       activeOpacity={0.75}
                     >
-                      <Text style={[styles.patternToggleBtnText, showPatternRound3 && styles.patternToggleBtnTextActive]}>
-                        🟢 3주 전 {showPatternRound3 ? 'ON' : 'OFF'}
+                      <Text style={[styles.patternToggleBtnText, showPattern2WeeksAgo && styles.patternToggleBtnTextActive]}>
+                        🟢 2주 전 {showPattern2WeeksAgo ? 'ON' : 'OFF'}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -2707,9 +2703,9 @@ export default function App() {
 
                           const isHit = analysisTargetData.numbers.includes(num);
 
-                          const hitPrev1 = showPatternRound1 && analysisTargetData.prev1?.includes(num);
-                          const hitPrev2 = showPatternRound2 && analysisTargetData.prev2?.includes(num);
-                          const hitPrev3 = showPatternRound3 && analysisTargetData.prev3?.includes(num);
+                          const hitThisWeek = showPatternThisWeek && analysisTargetData.numbersThisWeek?.includes(num);
+                          const hit1WeekAgo = showPattern1WeekAgo && analysisTargetData.numbers1WeekAgo?.includes(num);
+                          const hit2WeeksAgo = showPattern2WeeksAgo && analysisTargetData.numbers2WeeksAgo?.includes(num);
 
                           return (
                             <View
@@ -2731,11 +2727,11 @@ export default function App() {
                               {/* 순수 6개 번호 붉은 펜 마킹 효과 */}
                               {isHit && <View style={styles.slipCheckBar} />}
 
-                              {/* 최근 1회, 2주전, 3주전 주차별 닷 표시 */}
+                              {/* 이번주, 1주전, 2주전 주차별 닷 표시 */}
                               <View style={styles.overlayDotContainer}>
-                                {hitPrev1 && <View style={styles.overlayDotRed} />}
-                                {hitPrev2 && <View style={styles.overlayDotBlue} />}
-                                {hitPrev3 && <View style={styles.overlayDotGreen} />}
+                                {hitThisWeek && <View style={styles.overlayDotRed} />}
+                                {hit1WeekAgo && <View style={styles.overlayDotBlue} />}
+                                {hit2WeeksAgo && <View style={styles.overlayDotGreen} />}
                               </View>
                             </View>
                           );
