@@ -213,7 +213,6 @@ export default function App() {
   const [winningTopRound, setWinningTopRound] = useState(INITIAL_LATEST_ROUND);
   const [searchRoundInput, setSearchRoundInput] = useState('');
 
-  // 저장된 총 번호(게임) 개수 계산
   const totalSavedGamesCount = savedSets.reduce((sum, item) => sum + (item.games?.length || 0), 0);
 
   const displayed15Rounds = Array.from({ length: 15 }, (_, i) => winningTopRound - i).filter((r) => r >= 1);
@@ -358,7 +357,6 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
-  // 역대 4등 최소 1번 이상 당첨 여부 검증
   const hasRank4AtLeastOnce = useCallback(
     (candidateNumbers) => {
       const candSet = new Set(candidateNumbers);
@@ -377,7 +375,6 @@ export default function App() {
     [latestRound, getLottoNumbersByRound]
   );
 
-  // 5. 통계 정밀 필터 + 역대 4등 1회 이상 당첨 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       let attempts = 0;
@@ -393,7 +390,6 @@ export default function App() {
         }
       }
 
-      // 안전 장치: 조건 부합 번호 미발견 시 일반 통계 필터 통과 번호 반환
       attempts = 0;
       while (attempts < 2000) {
         attempts++;
@@ -408,8 +404,9 @@ export default function App() {
     [hasRank4AtLeastOnce]
   );
 
+  // ================= [공용 9가지 정밀 분석 데이터 생성기] =================
   const calculateNumbersAnalysis = useCallback(
-    (targetNumbers, baseRound, titleText, subText, bonusNum = null) => {
+    (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
 
       const nums = [...targetNumbers].sort((a, b) => a - b);
@@ -499,6 +496,8 @@ export default function App() {
         bonusNum,
         titleText,
         subText,
+        sourceType,  // 'WINNING' 또는 'SAVED'
+        sourceIndex, // WINNING: 회차(round), SAVED: 인덱스(flatIndex)
         rank3Count,
         rank4Count,
         rank5Count,
@@ -515,6 +514,69 @@ export default function App() {
     },
     [latestRound, getLottoNumbersByRound]
   );
+
+  // 저장된 번호 전체를 1차원 목록으로 평탄화
+  const getFlatSavedGames = useCallback(() => {
+    const flat = [];
+    savedSets.forEach((item) => {
+      item.games.forEach((g, gIdx) => {
+        const label = item.games.length === 1 ? '수동' : gameLabels[gIdx];
+        flat.push({
+          id: item.id,
+          date: item.date,
+          game: g,
+          gIdx,
+          gameLabel: label,
+        });
+      });
+    });
+    return flat;
+  }, [savedSets, gameLabels]);
+
+  // [정밀분석 내비게이션]: 당첨번호 회차 즉시 전환
+  const navigateWinningAnalysis = async (targetRound) => {
+    if (targetRound < 1 || targetRound > latestRound) return;
+    let roundData = getLottoNumbersByRound(targetRound);
+
+    if (roundData.isPending) {
+      const fetched = await fetchLottoRoundWithFallback(targetRound);
+      if (fetched) {
+        roundData = { ...fetched, isPending: false };
+        const updated = { ...lottoCache, [fetched.drwNo]: roundData };
+        setLottoCache(updated);
+        await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
+      }
+    }
+
+    const result = calculateNumbersAnalysis(
+      roundData.numbers,
+      targetRound,
+      `제 ${targetRound}회 당첨번호 정밀 분석`,
+      `${roundData.drwNoDate} 공식 결과 9가지 심층 데이터`,
+      roundData.bnusNo,
+      'WINNING',
+      targetRound
+    );
+    setAnalysisTargetData(result);
+  };
+
+  // [정밀분석 내비게이션]: 저장번호 번호 즉시 전환
+  const navigateSavedAnalysis = (targetIndex) => {
+    const flatList = getFlatSavedGames();
+    if (targetIndex < 0 || targetIndex >= flatList.length) return;
+    const target = flatList[targetIndex];
+
+    const result = calculateNumbersAnalysis(
+      target.game,
+      latestRound,
+      `저장 번호 정밀 분석 (${target.gameLabel})`,
+      `저장일시: ${target.date} | 동행복권 제${latestRound}회차 기준 통계`,
+      null,
+      'SAVED',
+      targetIndex
+    );
+    setAnalysisTargetData(result);
+  };
 
   const getExcludeFrequencyData = useCallback(() => {
     const counts = {};
@@ -606,7 +668,6 @@ export default function App() {
     Alert.alert('적용 완료', `최근 ${count}회차 당첨번호가 제외수에 등록되었습니다.`);
   };
 
-  // 번호 생성 실행기
   const handleGenerateWithOptions = useCallback(
     (optionType) => {
       if (45 - excludedNumbers.length < 6) {
@@ -1164,7 +1225,6 @@ export default function App() {
     }
   };
 
-  // 네이버 "로또645 1등판매점" 검색 링크 이동
   const openInNaverSearch = (round = null) => {
     const query = round ? `로또645 ${round}회 1등판매점` : '로또645 1등판매점';
     Linking.openURL(`https://m.search.naver.com/search.naver?query=${encodeURIComponent(query)}`);
@@ -1467,11 +1527,16 @@ export default function App() {
                               <TouchableOpacity
                                 style={styles.analysisSmallBtn}
                                 onPress={() => {
+                                  const flatList = getFlatSavedGames();
+                                  const foundIdx = flatList.findIndex((fg) => fg.id === item.id && fg.gIdx === gIdx);
                                   const analysisResult = calculateNumbersAnalysis(
                                     g,
                                     latestRound,
-                                    `저장 번호 정밀 분석 (${gameLabel}게임)`,
-                                    `저장일시: ${item.date} | 동행복권 제${latestRound}회차 기준 통계`
+                                    `저장 번호 정밀 분석 (${gameLabel})`,
+                                    `저장일시: ${item.date} | 동행복권 제${latestRound}회차 기준 통계`,
+                                    null,
+                                    'SAVED',
+                                    foundIdx !== -1 ? foundIdx : 0
                                   );
                                   setAnalysisTargetData(analysisResult);
                                   setIsAnalysisModalVisible(true);
@@ -1927,7 +1992,6 @@ export default function App() {
                         )}
                       </View>
                       <View style={styles.roundItemActionsRow}>
-                        {/* 개별 판매점 버튼 삭제됨, 정밀분석 버튼만 단독 유지 */}
                         <TouchableOpacity
                           style={styles.analysisSmallBtn}
                           onPress={() => {
@@ -1940,7 +2004,9 @@ export default function App() {
                               r,
                               `제 ${r}회 당첨번호 정밀 분석`,
                               `${roundData.drwNoDate} 공식 결과 9가지 심층 데이터`,
-                              roundData.bnusNo
+                              roundData.bnusNo,
+                              'WINNING',
+                              r
                             );
                             setAnalysisTargetData(analysisResult);
                             setIsAnalysisModalVisible(true);
@@ -1986,7 +2052,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 7] 당첨번호 & 저장번호 9가지 정밀 분석 대시보드 */}
+      {/* [모달 7] 당첨번호 & 저장번호 9가지 정밀 분석 대시보드 (이전/다음 즉시 이동 버튼 추가) */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -2008,6 +2074,108 @@ export default function App() {
                 <Text style={styles.closeBtnText}>✕</Text>
               </TouchableOpacity>
             </View>
+
+            {/* 당첨번호 회차 간 즉시 이동 네비게이션 바 */}
+            {analysisTargetData?.sourceType === 'WINNING' && (
+              <View style={styles.analysisNavSubBar}>
+                <TouchableOpacity
+                  style={[
+                    styles.analysisNavBtn,
+                    analysisTargetData.sourceIndex <= 1 && styles.analysisNavBtnDisabled,
+                  ]}
+                  onPress={() => navigateWinningAnalysis(analysisTargetData.sourceIndex - 1)}
+                  disabled={analysisTargetData.sourceIndex <= 1}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.analysisNavBtnText,
+                      analysisTargetData.sourceIndex <= 1 && styles.analysisNavBtnTextDisabled,
+                    ]}
+                  >
+                    ◀ 이전회차
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={styles.analysisNavCenterInfo}>
+                  <Text style={styles.analysisNavRoundBadge}>
+                    제 {analysisTargetData.sourceIndex} 회차
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={[
+                    styles.analysisNavBtn,
+                    analysisTargetData.sourceIndex >= latestRound && styles.analysisNavBtnDisabled,
+                  ]}
+                  onPress={() => navigateWinningAnalysis(analysisTargetData.sourceIndex + 1)}
+                  disabled={analysisTargetData.sourceIndex >= latestRound}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.analysisNavBtnText,
+                      analysisTargetData.sourceIndex >= latestRound && styles.analysisNavBtnTextDisabled,
+                    ]}
+                  >
+                    다음회차 ▶
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* 저장번호 목록 간 즉시 이동 네비게이션 바 */}
+            {analysisTargetData?.sourceType === 'SAVED' && (
+              <View style={styles.analysisNavSubBar}>
+                <TouchableOpacity
+                  style={[
+                    styles.analysisNavBtn,
+                    analysisTargetData.sourceIndex <= 0 && styles.analysisNavBtnDisabled,
+                  ]}
+                  onPress={() => navigateSavedAnalysis(analysisTargetData.sourceIndex - 1)}
+                  disabled={analysisTargetData.sourceIndex <= 0}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.analysisNavBtnText,
+                      analysisTargetData.sourceIndex <= 0 && styles.analysisNavBtnTextDisabled,
+                    ]}
+                  >
+                    ◀ 이전 번호
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={styles.analysisNavCenterInfo}>
+                  <Text style={styles.analysisNavRoundBadge}>
+                    {analysisTargetData.sourceIndex + 1} / {getFlatSavedGames().length}
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={[
+                    styles.analysisNavBtn,
+                    analysisTargetData.sourceIndex >= getFlatSavedGames().length - 1 && styles.analysisNavBtnDisabled,
+                  ]}
+                  onPress={() => navigateSavedAnalysis(analysisTargetData.sourceIndex + 1)}
+                  disabled={analysisTargetData.sourceIndex >= getFlatSavedGames().length - 1}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.analysisNavBtnText,
+                      analysisTargetData.sourceIndex >= getFlatSavedGames().length - 1 && styles.analysisNavBtnTextDisabled,
+                    ]}
+                  >
+                    다음 번호 ▶
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {analysisTargetData && (
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
@@ -2491,7 +2659,46 @@ const styles = StyleSheet.create({
   closeBtn: { padding: 6 },
   closeBtnText: { fontSize: 18, color: '#94a3b8', fontWeight: 'bold' },
 
-  // 옵션 위치로 이동한 직접 번호 생성 버튼
+  // [신규] 정밀분석 내비게이션 바 (이전/다음 즉시 이동 컨트롤)
+  analysisNavSubBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  analysisNavBtn: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 7,
+  },
+  analysisNavBtnDisabled: {
+    backgroundColor: '#cbd5e1',
+  },
+  analysisNavBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  analysisNavBtnTextDisabled: {
+    color: '#94a3b8',
+  },
+  analysisNavCenterInfo: {
+    alignItems: 'center',
+  },
+  analysisNavRoundBadge: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+
+  // 상단으로 이동한 직접 번호 생성 버튼
   manualTopOptionBtn: {
     backgroundColor: '#0f172a',
     paddingVertical: 10,
@@ -3102,438 +3309,4 @@ const styles = StyleSheet.create({
     borderColor: '#fca5a5',
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 6,
-  },
-  singleGameDeleteText: {
-    fontSize: 10,
-    color: '#b91c1c',
-    fontWeight: 'bold',
-  },
-  savedBallsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  miniBall: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  miniBallText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
-  matchedBallHighlight: {
-    borderWidth: 2,
-    borderColor: '#fbbf24',
-    transform: [{ scale: 1.05 }],
-  },
-  bonusBallHighlight: {
-    borderWidth: 2,
-    borderColor: '#38bdf8',
-    transform: [{ scale: 1.05 }],
-  },
-  matchMark: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    backgroundColor: '#fbbf24',
-    color: '#000000',
-    fontSize: 9,
-    fontWeight: 'bold',
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    textAlign: 'center',
-    overflow: 'hidden',
-  },
-  bonusMark: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    backgroundColor: '#38bdf8',
-    color: '#ffffff',
-    fontSize: 9,
-    fontWeight: 'bold',
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    textAlign: 'center',
-    overflow: 'hidden',
-  },
-  historyStatsBox: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    marginTop: 2,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  historyStatsTitle: {
-    fontSize: 11,
-    color: '#334155',
-    fontWeight: '700',
-  },
-  historyTotalText: {
-    color: '#2563eb',
-    fontWeight: '800',
-  },
-  historyDetailText: {
-    fontSize: 10,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  gameCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  badge: {
-    width: 26,
-    height: 26,
-    borderRadius: 8,
-    backgroundColor: '#1e293b',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  badgeText: { color: '#ffffff', fontWeight: '800', fontSize: 12 },
-  ballsRow: { flex: 1, flexDirection: 'row', justifyContent: 'space-between' },
-  ball: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ballText: { color: '#ffffff', fontSize: 13, fontWeight: '800' },
-  searchRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  searchInput: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 13,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    height: 40,
-  },
-  searchBtn: { backgroundColor: '#0f172a', paddingHorizontal: 16, justifyContent: 'center', borderRadius: 10 },
-  roundBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#f1f5f9',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginBottom: 8,
-  },
-  roundBtnText: { fontSize: 12, fontWeight: '700', color: '#2563eb' },
-  disabledText: { color: '#94a3b8' },
-  currentRoundText: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
-  winning15Scroll: {
-    maxHeight: 460,
-    marginBottom: 6,
-  },
-  roundItemCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  roundItemTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 5,
-  },
-  roundItemInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  roundItemActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  roundNumberBadge: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  roundItemDateText: {
-    fontSize: 11,
-    color: '#64748b',
-  },
-  analysisSmallBtn: {
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#93c5fd',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  analysisSmallBtnText: {
-    fontSize: 10,
-    color: '#1d4ed8',
-    fontWeight: '700',
-  },
-  miniBallsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  listMiniBall: {
-    width: 29,
-    height: 29,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  listMiniBallText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  miniPlusSign: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#94a3b8',
-    marginHorizontal: 2,
-  },
-  analysisBallsCard: {
-    backgroundColor: '#f1f5f9',
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  analysisBallsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  analysisBall: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 2,
-  },
-  analysisBallText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  analysisPlus: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#64748b',
-    marginHorizontal: 2,
-  },
-  metricGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 10,
-  },
-  metricItem: {
-    width: '48.5%',
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  metricItemFull: {
-    width: '100%',
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  metricLabel: {
-    fontSize: 11,
-    color: '#64748b',
-    fontWeight: '700',
-    marginBottom: 3,
-  },
-  metricValue: {
-    fontSize: 15,
-    fontWeight: '900',
-    color: '#0f172a',
-  },
-  analysisSectionCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 12,
-    marginBottom: 10,
-  },
-  analysisSectionTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#1e293b',
-    marginBottom: 8,
-  },
-  rankWinsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-  },
-  rankWinCol: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  rankWinLabel: {
-    fontSize: 11,
-    color: '#64748b',
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  rankWinValBlue: { fontSize: 14, fontWeight: '900', color: '#2563eb' },
-  rankWinValGreen: { fontSize: 14, fontWeight: '900', color: '#059669' },
-  rankWinValPurple: { fontSize: 14, fontWeight: '900', color: '#7c3aed' },
-  tableHeader: {
-    flexDirection: 'row',
-    backgroundColor: '#f1f5f9',
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    marginBottom: 4,
-  },
-  thText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#475569',
-  },
-  tableRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#f1f5f9',
-  },
-  microBall: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  microBallText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  tdText: {
-    fontSize: 11,
-  },
-  pairRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#f1f5f9',
-  },
-  pairRankBadge: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: '#d97706',
-    width: 28,
-  },
-  pairCountText: {
-    fontSize: 11,
-    color: '#334155',
-  },
-  scannerWrapper: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  scannerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    justifyContent: 'space-between',
-  },
-  scannerHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'android' ? 25 : 15,
-    paddingBottom: 15,
-  },
-  scannerHeaderTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  scannerCloseBtn: { padding: 4 },
-  scannerCloseIcon: { color: '#ffffff', fontSize: 22, fontWeight: '300' },
-  scannerBody: { alignItems: 'center', justifyContent: 'center' },
-  scanTargetBox: {
-    width: SCREEN_WIDTH * 0.68,
-    height: SCREEN_WIDTH * 0.68,
-    position: 'relative',
-    backgroundColor: 'transparent',
-  },
-  cornerBracket: { position: 'absolute', width: 32, height: 32, borderColor: '#3b82f6' },
-  bracketTL: { top: 0, left: 0, borderTopWidth: 3.5, borderLeftWidth: 3.5 },
-  bracketTR: { top: 0, right: 0, borderTopWidth: 3.5, borderRightWidth: 3.5 },
-  bracketBL: { bottom: 0, left: 0, borderBottomWidth: 3.5, borderLeftWidth: 3.5 },
-  bracketBR: { bottom: 0, right: 0, borderBottomWidth: 3.5, borderRightWidth: 3.5 },
-  scannerFooter: {
-    alignItems: 'center',
-    paddingBottom: Platform.OS === 'android' ? 36 : 28,
-    paddingHorizontal: 20,
-  },
-  scannerGuideText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  scannerSubGuideText: {
-    color: '#9ca3af',
-    fontSize: 12,
-    marginBottom: 20,
-  },
-  scannerBottomBtn: {
-    borderWidth: 1,
-    borderColor: '#4b5563',
-    backgroundColor: 'rgba(17, 24, 39, 0.85)',
-    paddingVertical: 10,
-    paddingHorizontal: 32,
-    borderRadius: 8,
-  },
-  scannerBottomBtnText: {
-    color: '#f3f4f6',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  btnTextWhiteBold: { color: '#ffffff', fontWeight: '800', fontSize: 16 },
-});
+    borderRadius: 6
