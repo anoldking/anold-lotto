@@ -78,7 +78,7 @@ const getBallColor = (number) => {
   return '#22c55e';
 };
 
-// 고정수 및 제외수를 모두 반영한 번호 생성기
+// 고정수 및 제외수를 모두 반영한 기본 무작위 번호 생성기
 const generateBasicLottoSet = (excludedNumbers = [], fixedNumbers = []) => {
   const selected = new Set(fixedNumbers);
   const pool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
@@ -96,7 +96,7 @@ const generateBasicLottoSet = (excludedNumbers = [], fixedNumbers = []) => {
 };
 
 // =================================================================
-// 통계 정밀 필터링 유틸
+// 통계 정밀 필터링 유틸 (총합 / 홀짝 / 연속쌍 / 끝수 / AC값 / 2연속이월제외 / 가로·세로멸구간)
 // =================================================================
 
 const isValidConsecutiveFilter = (sorted) => {
@@ -133,28 +133,31 @@ const calculateACValue = (sorted) => {
   return diffs.size - (sorted.length - 1);
 };
 
-// 직전회차와 2주전 회차에 '연속 2회 출현'했던 번호가 포함되어 있는지 검증하는 필터
-const hasDoubleConsecutiveCarryOver = (candidate, doubleCarryOverNumbers = []) => {
-  if (!doubleCarryOverNumbers || doubleCarryOverNumbers.length === 0) return false;
-  return candidate.some((n) => doubleCarryOverNumbers.includes(n));
-};
-
-// 7x7 용지 마킹 기준 가로멸/세로멸 구간 계산
-const getDeadLineCounts = (numbers) => {
+// 7x7 용지 마킹 기준 가로멸 / 세로멸 구간 계산 함수
+const getPaperDeadPattern = (numbers) => {
   const rowCounts = [0, 0, 0, 0, 0, 0, 0];
   const colCounts = [0, 0, 0, 0, 0, 0, 0];
+
   numbers.forEach((n) => {
     const rIdx = Math.floor((n - 1) / 7);
     const cIdx = (n - 1) % 7;
     if (rIdx < 7) rowCounts[rIdx]++;
     if (cIdx < 7) colCounts[cIdx]++;
   });
-  const deadRowCount = rowCounts.filter((cnt) => cnt === 0).length;
-  const deadColCount = colCounts.filter((cnt) => cnt === 0).length;
-  return { deadRowCount, deadColCount, rowCounts, colCounts };
+
+  const deadRows = rowCounts.filter((cnt) => cnt === 0).length;
+  const deadCols = colCounts.filter((cnt) => cnt === 0).length;
+
+  return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 통계 정밀 필터 (가로멸 2~4개, 세로멸 2~4개, 2연속이월 제외 조건 적용)
+// 직전회차와 2주전 회차에 연속 출현한 번호 포함 여부 체크
+const hasDoubleConsecutiveCarryOver = (candidate, doubleCarryOverNumbers = []) => {
+  if (!doubleCarryOverNumbers || doubleCarryOverNumbers.length === 0) return false;
+  return candidate.some((n) => doubleCarryOverNumbers.includes(n));
+};
+
+// 조건: 합 115~179, 홀짝 0/6 배제, AC>=7, 2연속이월 배제, 가로멸 2~4개 & 세로멸 2~4개
 const isStrictStatisticallyValid = (numbers, doubleCarryOverNumbers = []) => {
   const sum = numbers.reduce((acc, cur) => acc + cur, 0);
   if (sum < 115 || sum >= 180) return false;
@@ -166,13 +169,13 @@ const isStrictStatisticallyValid = (numbers, doubleCarryOverNumbers = []) => {
   if (!isValidLastDigitFilter(numbers)) return false;
   if (calculateACValue(numbers) <= 6) return false;
 
-  // 연속 2회 이상 이월수 제외 필터
+  // 연속 2회 이상 이월수 제외
   if (hasDoubleConsecutiveCarryOver(numbers, doubleCarryOverNumbers)) return false;
 
-  // 가로 멸구간 2~4개 및 세로 멸구간 2~4개 사이 번호만 허용
-  const { deadRowCount, deadColCount } = getDeadLineCounts(numbers);
-  if (deadRowCount < 2 || deadRowCount > 4) return false;
-  if (deadColCount < 2 || deadColCount > 4) return false;
+  // 로또 용지 마킹 패턴: 가로멸구간 2~4개 / 세로멸구간 2~4개
+  const { deadRows, deadCols } = getPaperDeadPattern(numbers);
+  if (deadRows < 2 || deadRows > 4) return false;
+  if (deadCols < 2 || deadCols > 4) return false;
 
   return true;
 };
@@ -238,7 +241,7 @@ export default function App() {
   const [selectedFixedPresetKey, setSelectedFixedPresetKey] = useState(null);
   const [presetFixedMatchedNumbers, setPresetFixedMatchedNumbers] = useState([]);
 
-  // 용지 마킹 패턴표 옵션 토글 상태 (최근 1회, 2주전, 3주전)
+  // 용지 마킹 패턴표 옵션 토글 상태 (직전주, 2주전, 3주전)
   const [showPatternRound1, setShowPatternRound1] = useState(false);
   const [showPatternRound2, setShowPatternRound2] = useState(false);
   const [showPatternRound3, setShowPatternRound3] = useState(false);
@@ -409,7 +412,7 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
-  // 최근 3주간(직전, 2주전, 3주전) 당첨 데이터 및 2연속 이월수 계산
+  // 최근 3주간 당첨 데이터 및 2연속 이월수 계산
   const getRecent3WeeksCarryOverData = useCallback(() => {
     const round1 = getLottoNumbersByRound(latestRound);
     const round2 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1) : null;
@@ -419,7 +422,6 @@ export default function App() {
     const list2 = round2 && !round2.isPending ? round2.numbers : [];
     const list3 = round3 && !round3.isPending ? round3.numbers : [];
 
-    // 직전 회차와 2주전 회차에 동시에 출현한 연속 2회 이상 이월수
     const doubleCarryOver = list1.filter((n) => list2.includes(n));
 
     return {
@@ -448,13 +450,13 @@ export default function App() {
     [latestRound, getLottoNumbersByRound]
   );
 
-  // 통계 정밀 필터 번호 생성 (2연속 이월수 제외 + 가로멸 2~4 / 세로멸 2~4)
+  // 통계 정밀 필터 (연속 2회 이상 이월수 제외 + 가로멸 2~4개 / 세로멸 2~4개 패턴)
   const generateStrictFilteredSet = useCallback(
     (excluded = [], fixed = []) => {
       const { doubleCarryOver } = getRecent3WeeksCarryOverData();
 
       let attempts = 0;
-      while (attempts < 5000) {
+      while (attempts < 6000) {
         attempts++;
         const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
@@ -467,7 +469,7 @@ export default function App() {
       }
 
       attempts = 0;
-      while (attempts < 2000) {
+      while (attempts < 3000) {
         attempts++;
         const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
@@ -515,6 +517,7 @@ export default function App() {
     }
   };
 
+  // 공용 정밀 분석 데이터 생성기 (마킹 패턴표에서 보너스 제외 처리)
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -601,10 +604,9 @@ export default function App() {
 
       const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 3);
 
-      // 용지 마킹 패턴 계산 (순수 6개 번호 기준)
-      const { deadRowCount, deadColCount, rowCounts, colCounts } = getDeadLineCounts(nums);
+      // 용지 마킹 패턴 계산 (보너스 번호 제외, 순수 6개 번호 기준)
+      const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
-      // 기준 회차 기준 최근 3주간의 번호 목록 (용지 오버레이 토글 비교용)
       const targetBaseRound = sourceType === 'WINNING' ? baseRound : latestRound;
       const prev1 = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
       const prev2 = targetBaseRound > 2 ? getLottoNumbersByRound(targetBaseRound - 2)?.numbers || [] : [];
@@ -635,8 +637,8 @@ export default function App() {
         topPairs,
         rowCounts,
         colCounts,
-        deadRowCount,
-        deadColCount,
+        deadRowCount: deadRows,
+        deadColCount: deadCols,
       };
     },
     [latestRound, getLottoNumbersByRound]
@@ -815,7 +817,7 @@ export default function App() {
         title = `🎲 기본 무작위 5세트 생성${fixedDesc}`;
       } else if (optionType === 'OPT_STRICT') {
         newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers, fixedNumbers));
-        title = `📊 통계 정밀 필터 (4등↑·2연속이월 배제·멸2~4)${fixedDesc}`;
+        title = `📊 통계 정밀 필터 (4등 1회↑·2연속이월제외·멸2~4)${fixedDesc}`;
       }
 
       setGames(newGames);
@@ -1465,7 +1467,7 @@ export default function App() {
                 <Text style={styles.modalTitle}>{generationTitle}</Text>
                 <Text style={styles.modalSubtitle}>
                   {activeGenOption === 'OPT_STRICT'
-                    ? '합115~179·AC≥7·4등1회↑·2연속이월제외·가로멸2~4·세로멸2~4'
+                    ? '합 115~179 · AC≥7 · 4등1회↑ · 2연속이월제외 · 멸구간 2~4개'
                     : '제외수/고정수 반영 무작위 추출'}
                 </Text>
               </View>
@@ -1533,7 +1535,7 @@ export default function App() {
                 activeOpacity={0.85}
               >
                 <Text style={styles.bottomOptionBtnTitle}>📊 통계 정밀 필터</Text>
-                <Text style={styles.bottomOptionBtnSub}>(이월제외·가로멸2~4·세로멸2~4)</Text>
+                <Text style={styles.bottomOptionBtnSub}>(4등 1회↑·2연속이월제외·멸2~4)</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1846,7 +1848,7 @@ export default function App() {
                   {/* 1. 직전 회차 (1주 전) 당첨번호 */}
                   <View style={styles.carryOverWeekRow}>
                     <View style={styles.carryOverWeekLabelBoxRed}>
-                      <Text style={styles.carryOverWeekLabelText}>직전 1회</Text>
+                      <Text style={styles.carryOverWeekLabelText}>직전 1주전</Text>
                       <Text style={styles.carryOverWeekSubText}>제{latestRound}회</Text>
                     </View>
                     <View style={styles.carryOverBallsFlex}>
@@ -1934,7 +1936,7 @@ export default function App() {
                   {recent3WeeksData.doubleCarryOver.length > 0 && (
                     <View style={styles.doubleCarryInfoBar}>
                       <Text style={styles.doubleCarryInfoText}>
-                        ⚠️ [직전+2주전] 연속 2번 출현수 ({recent3WeeksData.doubleCarryOver.join(', ')}): 통계 정밀 필터 생성 시 자동 배제됩니다.
+                        ⚠️ [직전+2주전] 연속 2번 출현수 ({recent3WeeksData.doubleCarryOver.join(', ')}): 통계 필터 생성 시 자동 배제됩니다.
                       </Text>
                     </View>
                   )}
@@ -2394,4 +2396,2393 @@ export default function App() {
                 onChangeText={setSearchRoundInput}
                 onSubmitEditing={handleSearchWinningRound}
               />
-              <TouchableOpacity style={styles
+              <TouchableOpacity style={styles.searchBtn} onPress={handleSearchWinningRound}>
+                <Text style={styles.btnTextWhite}>이동</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.roundBar}>
+              <TouchableOpacity
+                onPress={() => setWinningTopRound((prev) => Math.max(15, prev - 15))}
+                disabled={bottomRound <= 1}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text style={[styles.roundBtnText, bottomRound <= 1 && styles.disabledText]}>
+                  ◀ 이전 15회
+                </Text>
+              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Text style={styles.currentRoundText}>
+                  제 {winningTopRound}회 ~ {bottomRound}회
+                </Text>
+                {isLoadingWinningRounds && <ActivityIndicator size="small" color="#2563eb" />}
+              </View>
+              <TouchableOpacity
+                onPress={() => setWinningTopRound((prev) => Math.min(latestRound, prev + 15))}
+                disabled={winningTopRound >= latestRound}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text style={[styles.roundBtnText, winningTopRound >= latestRound && styles.disabledText]}>
+                  다음 15회 ▶
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.winning15Scroll} showsVerticalScrollIndicator={true}>
+              {displayed15Rounds.map((r) => {
+                const roundData = getLottoNumbersByRound(r);
+
+                return (
+                  <View key={`round-card-${r}`} style={styles.roundItemCard}>
+                    <View style={styles.roundItemTopRow}>
+                      <View style={styles.roundItemInfo}>
+                        <Text style={styles.roundNumberBadge}>제 {r} 회</Text>
+                        <Text style={styles.roundItemDateText}>{roundData.drwNoDate}</Text>
+                        {roundData.isPending && (
+                          <Text style={{ fontSize: 10, color: '#f59e0b', fontWeight: 'bold' }}>
+                            (동기화 중...)
+                          </Text>
+                        )}
+                      </View>
+                      <View style={styles.roundItemActionsRow}>
+                        <TouchableOpacity
+                          style={styles.analysisSmallBtn}
+                          onPress={() => {
+                            if (roundData.isPending) {
+                              Alert.alert('알림', '공식 당첨번호를 불러오는 중입니다. 잠시 후 다시 터치해 주세요.');
+                              return;
+                            }
+                            const analysisResult = calculateNumbersAnalysis(
+                              roundData.numbers,
+                              r,
+                              `제 ${r}회 당첨번호 정밀 분석`,
+                              `${roundData.drwNoDate} 공식 결과 9가지 심층 데이터`,
+                              roundData.bnusNo,
+                              'WINNING',
+                              r
+                            );
+                            setAnalysisTargetData(analysisResult);
+                            setIsAnalysisModalVisible(true);
+                          }}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Text style={styles.analysisSmallBtnText}>📊 정밀분석</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+
+                    <View style={styles.miniBallsRow}>
+                      {roundData.numbers.map((n, idx) => (
+                        <View
+                          key={`wb-${r}-${idx}`}
+                          style={[
+                            styles.listMiniBall,
+                            { backgroundColor: roundData.isPending ? '#cbd5e1' : getBallColor(n) },
+                          ]}
+                        >
+                          <Text style={styles.listMiniBallText}>{roundData.isPending ? '?' : n}</Text>
+                        </View>
+                      ))}
+                      <Text style={styles.miniPlusSign}>+</Text>
+                      <View
+                        style={[
+                          styles.listMiniBall,
+                          { backgroundColor: roundData.isPending ? '#cbd5e1' : getBallColor(roundData.bnusNo) },
+                        ]}
+                      >
+                        <Text style={styles.listMiniBallText}>{roundData.isPending ? '?' : roundData.bnusNo}</Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+
+            <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsWinningModalVisible(false)}>
+              <Text style={styles.btnTextWhite}>닫기</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 + 용지 패턴표 (보너스 삭제 & 1/2/3주전 마킹 토글) */}
+      <Modal
+        visible={isAnalysisModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsAnalysisModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.bottomModalContainer, { maxHeight: '92%' }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text style={styles.modalTitle} numberOfLines={1}>
+                  {analysisTargetData?.titleText || '📊 로또 번호 정밀 분석'}
+                </Text>
+                <Text style={styles.modalSubtitle} numberOfLines={1}>
+                  {analysisTargetData?.subText}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setIsAnalysisModalVisible(false)} style={styles.closeBtn}>
+                <Text style={styles.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {analysisTargetData?.sourceType === 'WINNING' && (
+              <View style={styles.analysisNavSubBar}>
+                <TouchableOpacity
+                  style={[
+                    styles.analysisNavBtn,
+                    analysisTargetData.sourceIndex <= 1 && styles.analysisNavBtnDisabled,
+                  ]}
+                  onPress={() => navigateWinningAnalysis(analysisTargetData.sourceIndex - 1)}
+                  disabled={analysisTargetData.sourceIndex <= 1}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.analysisNavBtnText,
+                      analysisTargetData.sourceIndex <= 1 && styles.analysisNavBtnTextDisabled,
+                    ]}
+                  >
+                    ◀ 이전회차
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={styles.analysisNavCenterInfo}>
+                  <Text style={styles.analysisNavRoundBadge}>
+                    제 {analysisTargetData.sourceIndex} 회차
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={[
+                    styles.analysisNavBtn,
+                    analysisTargetData.sourceIndex >= latestRound && styles.analysisNavBtnDisabled,
+                  ]}
+                  onPress={() => navigateWinningAnalysis(analysisTargetData.sourceIndex + 1)}
+                  disabled={analysisTargetData.sourceIndex >= latestRound}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.analysisNavBtnText,
+                      analysisTargetData.sourceIndex >= latestRound && styles.analysisNavBtnTextDisabled,
+                    ]}
+                  >
+                    다음회차 ▶
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {analysisTargetData?.sourceType === 'SAVED' && (
+              <View style={styles.analysisNavSubBar}>
+                <TouchableOpacity
+                  style={[
+                    styles.analysisNavBtn,
+                    analysisTargetData.sourceIndex <= 0 && styles.analysisNavBtnDisabled,
+                  ]}
+                  onPress={() => navigateSavedAnalysis(analysisTargetData.sourceIndex - 1)}
+                  disabled={analysisTargetData.sourceIndex <= 0}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.analysisNavBtnText,
+                      analysisTargetData.sourceIndex <= 0 && styles.analysisNavBtnTextDisabled,
+                    ]}
+                  >
+                    ◀ 이전 번호
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={styles.analysisNavCenterInfo}>
+                  <Text style={styles.analysisNavRoundBadge}>
+                    {analysisTargetData.sourceIndex + 1} / {getFlatSavedGames().length}
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={[
+                    styles.analysisNavBtn,
+                    analysisTargetData.sourceIndex >= getFlatSavedGames().length - 1 && styles.analysisNavBtnDisabled,
+                  ]}
+                  onPress={() => navigateSavedAnalysis(analysisTargetData.sourceIndex + 1)}
+                  disabled={analysisTargetData.sourceIndex >= getFlatSavedGames().length - 1}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.analysisNavBtnText,
+                      analysisTargetData.sourceIndex >= getFlatSavedGames().length - 1 && styles.analysisNavBtnTextDisabled,
+                    ]}
+                  >
+                    다음 번호 ▶
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {analysisTargetData && (
+              <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
+                {/* 6개 번호 표시 바 */}
+                <View style={styles.analysisBallsCard}>
+                  <View style={styles.analysisBallsRow}>
+                    {analysisTargetData.numbers.map((n) => (
+                      <View key={`an-b-${n}`} style={[styles.analysisBall, { backgroundColor: getBallColor(n) }]}>
+                        <Text style={styles.analysisBallText}>{n}</Text>
+                      </View>
+                    ))}
+                    {analysisTargetData.bonusNum && (
+                      <>
+                        <Text style={styles.analysisPlus}>+</Text>
+                        <View style={[styles.analysisBall, { backgroundColor: getBallColor(analysisTargetData.bonusNum) }]}>
+                          <Text style={styles.analysisBallText}>{analysisTargetData.bonusNum}</Text>
+                        </View>
+                      </>
+                    )}
+                  </View>
+                </View>
+
+                {/* 로또 용지 마킹 패턴 분석표 (7x7 SLIP) - 보너스 번호 삭제 & 1/2/3주전 마킹 토글 */}
+                <View style={styles.analysisSectionCard}>
+                  <View style={styles.slipCardHeader}>
+                    <Text style={styles.analysisSectionTitle}>
+                      📋 로또 용지 마킹 패턴표 (7×7 SLIP)
+                    </Text>
+                    <Text style={styles.slipSubDesc}>
+                      순수 6개 번호 마킹 기준 및 최근 주차 비교
+                    </Text>
+                  </View>
+
+                  {/* 최근 1회, 2주전, 3주전 마킹 표시 토글 버튼 바 */}
+                  <View style={styles.patternToggleControlRow}>
+                    <Text style={styles.patternToggleControlLabel}>주차 비교:</Text>
+
+                    <TouchableOpacity
+                      style={[styles.patternToggleBtn, showPatternRound1 && styles.patternToggleBtn1Active]}
+                      onPress={() => setShowPatternRound1((prev) => !prev)}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={[styles.patternToggleBtnText, showPatternRound1 && styles.patternToggleBtnTextActive]}>
+                        🔴 직전 1회 {showPatternRound1 ? 'ON' : 'OFF'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.patternToggleBtn, showPatternRound2 && styles.patternToggleBtn2Active]}
+                      onPress={() => setShowPatternRound2((prev) => !prev)}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={[styles.patternToggleBtnText, showPatternRound2 && styles.patternToggleBtnTextActive]}>
+                        🔵 2주 전 {showPatternRound2 ? 'ON' : 'OFF'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.patternToggleBtn, showPatternRound3 && styles.patternToggleBtn3Active]}
+                      onPress={() => setShowPatternRound3((prev) => !prev)}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={[styles.patternToggleBtnText, showPatternRound3 && styles.patternToggleBtnTextActive]}>
+                        🟢 3주 전 {showPatternRound3 ? 'ON' : 'OFF'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* 7x7 용지 그리드 (보너스 마킹은 완전 배제) */}
+                  <View style={styles.slipGridBox}>
+                    {Array.from({ length: 7 }, (_, rIdx) => (
+                      <View key={`slip-row-${rIdx}`} style={styles.slipGridRow}>
+                        {Array.from({ length: 7 }, (_, cIdx) => {
+                          const num = rIdx * 7 + cIdx + 1;
+                          if (num > 45) {
+                            return <View key={`slip-empty-${num}`} style={styles.slipCellEmpty} />;
+                          }
+
+                          const isHit = analysisTargetData.numbers.includes(num);
+
+                          const hitPrev1 = showPatternRound1 && analysisTargetData.prev1?.includes(num);
+                          const hitPrev2 = showPatternRound2 && analysisTargetData.prev2?.includes(num);
+                          const hitPrev3 = showPatternRound3 && analysisTargetData.prev3?.includes(num);
+
+                          return (
+                            <View
+                              key={`slip-cell-${num}`}
+                              style={[
+                                styles.slipCell,
+                                isHit && styles.slipCellMarked,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.slipCellText,
+                                  isHit && styles.slipCellTextMarked,
+                                ]}
+                              >
+                                {num}
+                              </Text>
+
+                              {/* 순수 6개 번호 붉은 펜 마킹 효과 */}
+                              {isHit && <View style={styles.slipCheckBar} />}
+
+                              {/* 최근 1회, 2주전, 3주전 주차별 닷 표시 */}
+                              <View style={styles.overlayDotContainer}>
+                                {hitPrev1 && <View style={styles.overlayDotRed} />}
+                                {hitPrev2 && <View style={styles.overlayDotBlue} />}
+                                {hitPrev3 && <View style={styles.overlayDotGreen} />}
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    ))}
+                  </View>
+
+                  <View style={styles.slipStatsPanel}>
+                    <View style={styles.slipStatRow}>
+                      <Text style={styles.slipStatLabel}>가로줄(1~7행) 출현 분포:</Text>
+                      <Text style={styles.slipStatValue}>
+                        {analysisTargetData.rowCounts.map((cnt, i) => `${i + 1}행:${cnt}`).join(' | ')}
+                      </Text>
+                    </View>
+                    <View style={styles.slipStatRow}>
+                      <Text style={styles.slipStatLabel}>세로줄(1~7열) 출현 분포:</Text>
+                      <Text style={styles.slipStatValue}>
+                        {analysisTargetData.colCounts.map((cnt, i) => `${i + 1}열:${cnt}`).join(' | ')}
+                      </Text>
+                    </View>
+                    <View style={styles.slipBadgeRow}>
+                      <View style={styles.slipDeadBadge}>
+                        <Text style={styles.slipDeadBadgeText}>
+                          가로 멸(0개) 구간: {analysisTargetData.deadRowCount}개 라인
+                        </Text>
+                      </View>
+                      <View style={styles.slipDeadBadge}>
+                        <Text style={styles.slipDeadBadgeText}>
+                          세로 멸(0개) 구간: {analysisTargetData.deadColCount}개 라인
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+
+                {/* 5가지 핵심 지표 */}
+                <View style={styles.metricGrid}>
+                  <View style={styles.metricItem}>
+                    <Text style={styles.metricLabel}>홀짝 비율</Text>
+                    <Text style={styles.metricValue}>
+                      {analysisTargetData.oddCount} : {analysisTargetData.evenCount}
+                    </Text>
+                  </View>
+                  <View style={styles.metricItem}>
+                    <Text style={styles.metricLabel}>번호 총합</Text>
+                    <Text style={[styles.metricValue, { color: '#0284c7' }]}>
+                      {analysisTargetData.sum}
+                    </Text>
+                  </View>
+                  <View style={styles.metricItem}>
+                    <Text style={styles.metricLabel}>고저 비율(22기준)</Text>
+                    <Text style={styles.metricValue}>
+                      {analysisTargetData.lowCount} : {analysisTargetData.highCount}
+                    </Text>
+                  </View>
+                  <View style={styles.metricItem}>
+                    <Text style={styles.metricLabel}>이월수(전회차)</Text>
+                    <Text style={[styles.metricValue, { color: '#dc2626' }]}>
+                      {analysisTargetData.carryOverNumbers.length > 0
+                        ? `${analysisTargetData.carryOverNumbers.join(', ')} (${analysisTargetData.carryOverNumbers.length}개)`
+                        : '없음 (0개)'}
+                    </Text>
+                  </View>
+                  <View style={styles.metricItemFull}>
+                    <Text style={styles.metricLabel}>AC값 (산술적 복잡도 ≥ 7)</Text>
+                    <Text
+                      style={[
+                        styles.metricValue,
+                        {
+                          color:
+                            calculateACValue(analysisTargetData.numbers) >= 7
+                              ? '#059669'
+                              : '#dc2626',
+                        },
+                      ]}
+                    >
+                      AC {calculateACValue(analysisTargetData.numbers)} (
+                      {calculateACValue(analysisTargetData.numbers) >= 7
+                        ? '통계적 유효 범위'
+                        : '규칙성 높음/배제 대상'}
+                      )
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.analysisSectionCard}>
+                  <Text style={styles.analysisSectionTitle}>
+                    🏆 역대 회차 누적 등수별 당첨 횟수
+                  </Text>
+                  <View style={styles.rankWinsRow}>
+                    <View style={styles.rankWinCol}>
+                      <Text style={styles.rankWinLabel}>3등 (5개)</Text>
+                      <Text style={styles.rankWinValBlue}>{analysisTargetData.rank3Count}회</Text>
+                    </View>
+                    <View style={styles.rankWinCol}>
+                      <Text style={styles.rankWinLabel}>4등 (4개)</Text>
+                      <Text style={styles.rankWinValGreen}>{analysisTargetData.rank4Count}회</Text>
+                    </View>
+                    <View style={styles.rankWinCol}>
+                      <Text style={styles.rankWinLabel}>5등 (3개)</Text>
+                      <Text style={styles.rankWinValPurple}>{analysisTargetData.rank5Count}회</Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.analysisSectionCard}>
+                  <Text style={styles.analysisSectionTitle}>
+                    📈 번호별 최근 30회 빈도 및 직전 미출현 주기
+                  </Text>
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.thText, { width: '22%' }]}>번호</Text>
+                    <Text style={[styles.thText, { width: '38%' }]}>최근 30회 출현</Text>
+                    <Text style={[styles.thText, { width: '40%' }]}>직전 미출현 텀</Text>
+                  </View>
+                  {analysisTargetData.numbers.map((n) => (
+                    <View key={`freq-row-${n}`} style={styles.tableRow}>
+                      <View style={{ width: '22%', flexDirection: 'row', alignItems: 'center' }}>
+                        <View style={[styles.microBall, { backgroundColor: getBallColor(n) }]}>
+                          <Text style={styles.microBallText}>{n}</Text>
+                        </View>
+                      </View>
+                      <Text style={[styles.tdText, { width: '38%', fontWeight: 'bold', color: '#1e3a8a' }]}>
+                        {analysisTargetData.recent30Counts[n]}회 출현
+                      </Text>
+                      <Text style={[styles.tdText, { width: '40%', color: '#475569' }]}>
+                        {analysisTargetData.absenceWeeks[n] === 0
+                          ? '직전회차 출현'
+                          : `${analysisTargetData.absenceWeeks[n]}주 만에 출현`}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={styles.analysisSectionCard}>
+                  <Text style={styles.analysisSectionTitle}>
+                    🤝 번호간 동반 출현 횟수 TOP 3 (케미 번호)
+                  </Text>
+                  {analysisTargetData.topPairs.map((p, idx) => (
+                    <View key={`pair-${idx}`} style={styles.pairRow}>
+                      <Text style={styles.pairRankBadge}>{idx + 1}위</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <View style={[styles.microBall, { backgroundColor: getBallColor(p.n1) }]}>
+                          <Text style={styles.microBallText}>{p.n1}</Text>
+                        </View>
+                        <Text style={{ fontWeight: 'bold', color: '#64748b' }}>+</Text>
+                        <View style={[styles.microBall, { backgroundColor: getBallColor(p.n2) }]}>
+                          <Text style={styles.microBallText}>{p.n2}</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.pairCountText}>
+                        역대 함께 당첨: <Text style={{ color: '#dc2626', fontWeight: 'bold' }}>{p.count}회</Text>
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+            )}
+
+            <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsAnalysisModalVisible(false)}>
+              <Text style={styles.btnTextWhite}>확인</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* [모달 8] QR 코드 스캐너 모달 */}
+      <Modal
+        visible={isCameraModalVisible}
+        animationType="fade"
+        onRequestClose={() => setIsCameraModalVisible(false)}
+      >
+        <View style={styles.scannerWrapper}>
+          <CameraView
+            style={StyleSheet.absoluteFillObject}
+            facing="back"
+            barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+            onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+          />
+
+          <SafeAreaView style={styles.scannerOverlay}>
+            <View style={styles.scannerHeader}>
+              <Text style={styles.scannerHeaderTitle}>QR 스캔</Text>
+              <TouchableOpacity
+                onPress={() => setIsCameraModalVisible(false)}
+                style={styles.scannerCloseBtn}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Text style={styles.scannerCloseIcon}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.scannerBody}>
+              <View style={styles.scanTargetBox}>
+                <View style={[styles.cornerBracket, styles.bracketTL]} />
+                <View style={[styles.cornerBracket, styles.bracketTR]} />
+                <View style={[styles.cornerBracket, styles.bracketBL]} />
+                <View style={[styles.cornerBracket, styles.bracketBR]} />
+              </View>
+            </View>
+
+            <View style={styles.scannerFooter}>
+              <Text style={styles.scannerGuideText}>QR 코드를 프레임 안에 비춰주세요</Text>
+              <Text style={styles.scannerSubGuideText}>자동으로 번호를 판독해 당첨 결과를 실시간 대조합니다</Text>
+
+              <TouchableOpacity
+                style={styles.scannerBottomBtn}
+                onPress={() => setIsCameraModalVisible(false)}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.scannerBottomBtnText}>닫기</Text>
+              </TouchableOpacity>
+            </View>
+          </SafeAreaView>
+        </View>
+      </Modal>
+
+      {/* [모달 9] QR 코드 당첨 대조 결과 모달 */}
+      <Modal
+        visible={isQrResultModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsQrResultModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.bottomModalContainer, { maxHeight: '92%' }]}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>🎫 QR 당첨 확인 결과</Text>
+                <Text style={styles.modalSubtitle}>
+                  제 {qrResultData?.round}회 복권 대조 (추첨일: {qrResultData?.winningInfo?.drwNoDate || '확인 중'})
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setIsQrResultModalVisible(false)}
+                style={styles.closeBtn}
+              >
+                <Text style={styles.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {qrResultData?.winningInfo && (
+              <View style={styles.winningReferenceBar}>
+                <Text style={styles.winningReferenceTitle}>
+                  제{qrResultData.round}회 공식 당첨번호 {qrResultData.winningInfo.isPending && '(미추첨/확인대기)'}
+                </Text>
+                <View style={styles.winningRefBallsRow}>
+                  {qrResultData.winningInfo.numbers.map((n, idx) => (
+                    <View key={`qr-win-${idx}`} style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(n) }]}>
+                      <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : n}</Text>
+                    </View>
+                  ))}
+                  <Text style={styles.refPlus}>+</Text>
+                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(qrResultData.winningInfo.bnusNo) }]}>
+                    <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : qrResultData.winningInfo.bnusNo}</Text>
+                  </View>
+                </View>
+              </View>
+            )}
+
+            <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+              {qrResultData?.games.map((game, idx) => {
+                const res = qrResultData.results?.[idx] || {
+                  rank: '조회 대기',
+                  grade: 0,
+                  color: '#64748b',
+                  bg: '#f1f5f9',
+                };
+                const winNums = (!qrResultData.winningInfo?.isPending && qrResultData.winningInfo?.numbers) ? qrResultData.winningInfo.numbers : [];
+                const bonusNum = !qrResultData.winningInfo?.isPending ? qrResultData.winningInfo?.bnusNo : null;
+
+                return (
+                  <View key={`qr-res-${idx}`} style={styles.savedGameItem}>
+                    <View style={styles.savedRowTop}>
+                      <View style={styles.gameTopLeftGroup}>
+                        <View style={styles.miniBadge}>
+                          <Text style={styles.miniBadgeText}>{gameLabels[idx] || `${idx + 1}`}</Text>
+                        </View>
+                        <View style={[styles.resultBadge, { backgroundColor: res.bg }]}>
+                          <Text style={[styles.resultBadgeText, { color: res.color }]}>
+                            {res.rank}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={styles.savedBallsRow}>
+                      {game.map((num) => {
+                        const isMatched = winNums.includes(num);
+                        const isBonus = num === bonusNum;
+
+                        return (
+                          <View
+                            key={`qr-b-${idx}-${num}`}
+                            style={[
+                              styles.miniBall,
+                              { backgroundColor: getBallColor(num) },
+                              isMatched && styles.matchedBallHighlight,
+                              isBonus && styles.bonusBallHighlight,
+                            ]}
+                          >
+                            <Text style={styles.miniBallText}>{num}</Text>
+                            {isMatched && <Text style={styles.matchMark}>✓</Text>}
+                            {isBonus && <Text style={styles.bonusMark}>B</Text>}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+
+            <View style={styles.modalFooterRow}>
+              <TouchableOpacity
+                style={styles.saveBtn}
+                onPress={async () => {
+                  if (!qrResultData) return;
+                  const now = new Date();
+                  const dateStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(
+                    now.getDate()
+                  ).padStart(2, '0')} (QR ${qrResultData.round}회)`;
+
+                  const newEntry = {
+                    id: Date.now().toString(),
+                    date: dateStr,
+                    games: qrResultData.games,
+                  };
+
+                  const updated = [newEntry, ...savedSets];
+                  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+                  setSavedSets(updated);
+                  Alert.alert('보관 완료', '스캔한 번호가 보관함에 저장되었습니다.');
+                  setIsQrResultModalVisible(false);
+                }}
+              >
+                <Text style={styles.btnTextWhite}>💾 보관함에 담기</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.confirmBtn, { flex: 1 }]}
+                onPress={() => {
+                  setIsQrResultModalVisible(false);
+                  setScanned(false);
+                  setIsCameraModalVisible(true);
+                }}
+              >
+                <Text style={styles.btnTextWhite}>다시 스캔</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+// -----------------------------------------------------------------
+// 스타일시트
+// -----------------------------------------------------------------
+const styles = StyleSheet.create({
+  fullScreenContainer: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  backgroundImage: {
+    width: SCREEN_WIDTH,
+    height: '100%',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  goldCoinTrigger: {
+    position: 'absolute',
+    top: '48.5%',
+    width: SCREEN_WIDTH * 0.44,
+    height: SCREEN_WIDTH * 0.44,
+    borderRadius: (SCREEN_WIDTH * 0.44) / 2,
+  },
+  menuGridContainer: {
+    position: 'absolute',
+    bottom: '7.5%',
+    width: '90%',
+    height: '19%',
+    justifyContent: 'space-between',
+  },
+  menuGridRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    height: '46%',
+  },
+  menuGridItem: {
+    width: '48%',
+    height: '100%',
+    borderRadius: 20,
+    position: 'relative',
+  },
+  mainBadgeCounter: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#dc2626',
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+  },
+  mainBadgeCounterText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  savedModalCounterBadge: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  savedModalCounterBadgeText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  naverTopIntegratedBtn: {
+    backgroundColor: '#03c75a',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    elevation: 1,
+  },
+  naverTopIntegratedBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'flex-end',
+  },
+  bottomModalContainer: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: Platform.OS === 'android' ? 36 : 28,
+    maxHeight: '94%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  modalSubtitle: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  appliedFixedBanner: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    marginVertical: 4,
+  },
+  appliedFixedBannerText: {
+    color: '#047857',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  headerRefreshBtn: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  headerRefreshText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  closeBtn: { padding: 6 },
+  closeBtnText: { fontSize: 18, color: '#94a3b8', fontWeight: 'bold' },
+  analysisNavSubBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  analysisNavBtn: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 7,
+  },
+  analysisNavBtnDisabled: {
+    backgroundColor: '#cbd5e1',
+  },
+  analysisNavBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  analysisNavBtnTextDisabled: {
+    color: '#94a3b8',
+  },
+  analysisNavCenterInfo: {
+    alignItems: 'center',
+  },
+  analysisNavRoundBadge: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  manualTopOptionBtn: {
+    backgroundColor: '#0f172a',
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  manualTopOptionBtnText: {
+    color: '#38bdf8',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  twoOptionBtnRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+    marginTop: 2,
+  },
+  bottomOptionBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  strictOptionBtn: {
+    backgroundColor: '#059669',
+  },
+  normalOptionBtn: {
+    backgroundColor: '#2563eb',
+  },
+  bottomOptionBtnTitle: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  bottomOptionBtnSub: {
+    color: '#e2e8f0',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  modalScroll: { maxHeight: 330, marginBottom: 8 },
+  modalFooterRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  confirmBtn: {
+    backgroundColor: '#334155',
+    paddingVertical: 13,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  saveBtn: {
+    flex: 1.2,
+    backgroundColor: '#d97706',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  btnTextWhite: { color: '#ffffff', fontWeight: '800', fontSize: 14 },
+  btnTextWhiteBold: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
+  exportButtonGroup: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  exportPdfBtn: {
+    flex: 1,
+    backgroundColor: '#dc2626',
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  exportPdfBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  exportExcelBtn: {
+    flex: 1,
+    backgroundColor: '#16a34a',
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  exportExcelBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  deleteAllSavedBtn: {
+    flex: 1.2,
+    backgroundColor: '#475569',
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  deleteAllSavedBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  centerModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  excludePopupBox: {
+    width: POPUP_WIDTH,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    overflow: 'hidden',
+    elevation: 10,
+  },
+  filterTabContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#e2e8f0',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  filterTabItem: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterTabItemActive: {
+    backgroundColor: '#fee2e2',
+    borderBottomWidth: 3,
+    borderBottomColor: '#dc2626',
+  },
+  filterTabItemFixedActive: {
+    backgroundColor: '#dcfce7',
+    borderBottomWidth: 3,
+    borderBottomColor: '#16a34a',
+  },
+  filterTabItemText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#64748b',
+  },
+  filterTabItemTextActive: {
+    color: '#b91c1c',
+  },
+  filterTabItemFixedTextActive: {
+    color: '#15803d',
+  },
+  excludePopupHeader: {
+    backgroundColor: '#d1d5db',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  excludePopupTitle: {
+    fontSize: 19,
+    fontWeight: '900',
+    color: '#374151',
+  },
+  excludeCloseTouch: {
+    paddingHorizontal: 12,
+  },
+  excludeCloseX: {
+    fontSize: 20,
+    color: '#6b7280',
+    fontWeight: 'bold',
+  },
+  excludeCountBar: {
+    backgroundColor: '#bfdbfe',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  excludeCountText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#1e3a8a',
+  },
+  excludeCountHighlight: {
+    color: '#2563eb',
+  },
+  bonusToggleBtn: {
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+  },
+  bonusToggleBtnActive: {
+    backgroundColor: '#1d4ed8',
+    borderColor: '#1e40af',
+  },
+  bonusToggleBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1e3a8a',
+  },
+  bonusToggleBtnTextActive: {
+    color: '#ffffff',
+  },
+  quickExcludeRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    gap: 6,
+  },
+  quickExcludeBtn: {
+    flex: 1,
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    paddingVertical: 6,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickExcludeBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#b91c1c',
+  },
+  excludeAnalysisTabRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    gap: 6,
+  },
+  analysisLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#475569',
+  },
+  roundTabBtn: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+  },
+  roundTabBtnActive: {
+    backgroundColor: '#3b82f6',
+    borderColor: '#2563eb',
+  },
+  roundTabBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  roundTabBtnTextActive: {
+    color: '#ffffff',
+    fontWeight: '800',
+  },
+  autoOptionBtnRow: {
+    paddingHorizontal: 10,
+    paddingTop: 6,
+  },
+  autoOptionBtn: {
+    backgroundColor: '#e0e7ff',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    paddingVertical: 6,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  autoOptionBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#4338ca',
+  },
+  statsPanel: {
+    backgroundColor: '#f8fafc',
+    marginHorizontal: 10,
+    marginTop: 6,
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  statsPanelHeader: {
+    marginBottom: 6,
+  },
+  statsPanelTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#334155',
+  },
+  statsBallsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  statBallItem: {
+    alignItems: 'center',
+    width: 44,
+  },
+  statBallMini: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    elevation: 2,
+  },
+  statBallMiniExcluded: {
+    backgroundColor: '#cbd5e1',
+    opacity: 0.4,
+  },
+  statBallMiniText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  statBallMiniTextExcluded: {
+    color: '#64748b',
+    textDecorationLine: 'line-through',
+  },
+  strikeMarkMini: {
+    position: 'absolute',
+    color: '#dc2626',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  statCountBadge: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    marginTop: 2,
+  },
+
+  // 최근 3주간 이월수 구별 및 고정수 지정 패널
+  carryOverSectionBox: {
+    backgroundColor: '#ffffff',
+    marginHorizontal: 10,
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  carryOverHeaderRow: {
+    marginBottom: 6,
+  },
+  carryOverHeaderTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  carryOverWeekRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 4,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    padding: 6,
+  },
+  carryOverWeekLabelBoxRed: {
+    width: 68,
+    backgroundColor: '#fee2e2',
+    borderRadius: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+  },
+  carryOverWeekLabelBoxBlue: {
+    width: 68,
+    backgroundColor: '#e0f2fe',
+    borderRadius: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+  },
+  carryOverWeekLabelBoxGreen: {
+    width: 68,
+    backgroundColor: '#dcfce7',
+    borderRadius: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  carryOverWeekLabelText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  carryOverWeekSubText: {
+    fontSize: 9,
+    color: '#64748b',
+    fontWeight: '700',
+  },
+  carryOverBallsFlex: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  carryOverBallTouch: {
+    position: 'relative',
+    alignItems: 'center',
+  },
+  carryOverBallTouchFixed: {
+    transform: [{ scale: 1.08 }],
+  },
+  carryOverBallCircle: {
+    width: 27,
+    height: 27,
+    borderRadius: 13.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  carryOverBallCircleText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  carryOverPinMark: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    fontSize: 9,
+  },
+  doubleWarnBadge: {
+    position: 'absolute',
+    bottom: -6,
+    backgroundColor: '#dc2626',
+    borderRadius: 4,
+    paddingHorizontal: 2,
+  },
+  doubleWarnBadgeText: {
+    color: '#ffffff',
+    fontSize: 7,
+    fontWeight: '900',
+  },
+  doubleCarryInfoBar: {
+    marginTop: 6,
+    backgroundColor: '#fffbeb',
+    borderRadius: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+  },
+  doubleCarryInfoText: {
+    fontSize: 10,
+    color: '#b45309',
+    fontWeight: '700',
+  },
+
+  // 고정수 4대 프리셋 관련 스타일
+  fixedPresetContainer: {
+    backgroundColor: '#f0fdf4',
+    marginHorizontal: 10,
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  fixedPresetTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+    marginBottom: 8,
+  },
+  presetButtonGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  presetSelectBtn: {
+    width: '48.8%',
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#86efac',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+  },
+  presetSelectBtnActive: {
+    backgroundColor: '#15803d',
+    borderColor: '#14532d',
+  },
+  presetSelectBtnTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  presetSelectBtnTitleActive: {
+    color: '#ffffff',
+  },
+  presetSelectBtnSub: {
+    fontSize: 9,
+    color: '#65a30d',
+    marginTop: 2,
+  },
+  presetResultContainer: {
+    marginTop: 10,
+    backgroundColor: '#ffffff',
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+  },
+  presetResultHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  presetResultHeaderText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#374151',
+  },
+  quickAdd5Text: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#059669',
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  presetEmptyText: {
+    fontSize: 11,
+    color: '#9ca3af',
+    textAlign: 'center',
+    paddingVertical: 6,
+  },
+  presetBallsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  presetBallTouch: {
+    position: 'relative',
+    alignItems: 'center',
+  },
+  presetBallTouchFixed: {
+    transform: [{ scale: 1.08 }],
+  },
+  presetBallCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  presetBallCircleText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  presetPinMark: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    fontSize: 10,
+  },
+
+  // 로또 볼 그리드
+  excludeBallWrapper: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: BALL_GAP,
+  },
+  standardLottoBall: {
+    width: BALL_SIZE,
+    height: BALL_SIZE,
+    borderRadius: BALL_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+    position: 'relative',
+  },
+  standardLottoBallText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  standardLottoBallExcluded: {
+    backgroundColor: '#cbd5e1',
+    opacity: 0.35,
+    elevation: 0,
+  },
+  standardLottoBallFixed: {
+    borderWidth: 3,
+    borderColor: '#15803d',
+    transform: [{ scale: 1.08 }],
+  },
+  standardLottoBallTextExcluded: {
+    color: '#64748b',
+    textDecorationLine: 'line-through',
+  },
+  ballStrikeBadge: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ballStrikeX: {
+    color: '#dc2626',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  ballFixedBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    backgroundColor: '#15803d',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ballFixedPin: {
+    fontSize: 10,
+  },
+  excludePopupBtnRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 8,
+    backgroundColor: '#ffffff',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e2e8f0',
+  },
+  excludeConfirmOrangeBtn: {
+    flex: 1,
+    backgroundColor: '#f97316',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  excludeInvertPurpleBtn: {
+    flex: 1.1,
+    backgroundColor: '#7c3aed',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  excludeResetBlueBtn: {
+    flex: 1,
+    backgroundColor: '#0284c7',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualSelectionBar: {
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  manualSelectionBarTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 6,
+  },
+  manualMiniBallsPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 28,
+  },
+  manualPlaceholderText: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '600',
+  },
+  manualSelectedMiniBall: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualSelectedMiniBallText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  manualLottoBallSelected: {
+    borderWidth: 3,
+    borderColor: '#059669',
+    transform: [{ scale: 1.08 }],
+  },
+  manualSelectedBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#059669',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualSelectedBadgeCheck: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  oppositeActionBtn: {
+    backgroundColor: '#8b5cf6',
+    paddingVertical: 11,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  oppositeActionBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  oppositeBannerBtn: {
+    backgroundColor: '#f5f3ff',
+    borderWidth: 1.5,
+    borderColor: '#ddd6fe',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  oppositeBannerBtnTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#6d28d9',
+  },
+  oppositeBannerBtnSub: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#8b5cf6',
+  },
+  winningReferenceBar: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  winningRefHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  winningReferenceTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  smallRefreshTouch: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  smallRefreshTouchText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  winningRefBallsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    minHeight: 24,
+  },
+  refBall: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refBallText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  refPlus: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#94a3b8',
+    marginHorizontal: 2,
+  },
+  emptyBox: { alignItems: 'center', paddingVertical: 40 },
+  emptyText: { fontSize: 15, color: '#64748b', fontWeight: '600' },
+  emptySubText: { fontSize: 12, color: '#94a3b8', marginTop: 4 },
+  savedCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    elevation: 2,
+  },
+  savedCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: 8,
+    marginBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e2e8f0',
+  },
+  savedDate: { fontSize: 12, color: '#64748b', fontWeight: '600' },
+  delText: { fontSize: 11, color: '#94a3b8', fontWeight: 'bold' },
+  savedGameItem: {
+    marginVertical: 6,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f1f5f9',
+  },
+  savedRowTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  gameTopLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  miniBadge: {
+    paddingHorizontal: 6,
+    height: 20,
+    borderRadius: 6,
+    backgroundColor: '#334155',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miniBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: 'bold' },
+  resultBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  resultBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  singleGameDeleteTouch: {
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  singleGameDeleteText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#dc2626',
+  },
+  savedBallsRow: {
+    flexDirection: 'row',
+    gap: 4,
+    marginVertical: 4,
+  },
+  miniBall: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  miniBallText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  matchedBallHighlight: {
+    borderWidth: 2,
+    borderColor: '#dc2626',
+  },
+  bonusBallHighlight: {
+    borderWidth: 2,
+    borderColor: '#2563eb',
+  },
+  matchMark: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    fontSize: 8,
+    color: '#dc2626',
+    fontWeight: '900',
+  },
+  bonusMark: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    fontSize: 8,
+    color: '#2563eb',
+    fontWeight: '900',
+  },
+  historyStatsBox: {
+    marginTop: 4,
+  },
+  historyStatsTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  historyTotalText: {
+    color: '#dc2626',
+    fontWeight: '800',
+  },
+  historyDetailText: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  gameCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  badge: {
+    backgroundColor: '#1e293b',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  badgeText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  ballsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  ball: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+    position: 'relative',
+  },
+  fixedBallHighlight: {
+    borderWidth: 2,
+    borderColor: '#15803d',
+  },
+  fixedBallBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: '#15803d',
+    borderRadius: 4,
+    paddingHorizontal: 2,
+  },
+  fixedBallBadgeText: {
+    color: '#ffffff',
+    fontSize: 7,
+    fontWeight: '900',
+  },
+  ballText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  roundItemCard: {
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e2e8f0',
+  },
+  roundItemTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  roundItemInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  roundNumberBadge: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  roundItemDateText: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  roundItemActionsRow: {
+    flexDirection: 'row',
+  },
+  miniBallsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  listMiniBall: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listMiniBallText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  miniPlusSign: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#94a3b8',
+    marginHorizontal: 1,
+  },
+  analysisSmallBtn: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  analysisSmallBtnText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  analysisBallsCard: {
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  analysisBallsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  analysisBall: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  analysisBallText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  analysisPlus: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#94a3b8',
+  },
+  slipCardHeader: {
+    marginBottom: 6,
+  },
+  slipSubDesc: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+  },
+
+  // 용지 마킹 패턴표 옵션 토글 바
+  patternToggleControlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f1f5f9',
+    padding: 6,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  patternToggleControlLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#475569',
+    marginLeft: 2,
+  },
+  patternToggleBtn: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+  },
+  patternToggleBtn1Active: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#ef4444',
+  },
+  patternToggleBtn2Active: {
+    backgroundColor: '#e0f2fe',
+    borderColor: '#0284c7',
+  },
+  patternToggleBtn3Active: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#16a34a',
+  },
+  patternToggleBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  patternToggleBtnTextActive: {
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+
+  slipGridBox: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    padding: 6,
+    alignItems: 'center',
+  },
+  slipGridRow: {
+    flexDirection: 'row',
+    gap: 4,
+    marginVertical: 2,
+  },
+  slipCell: {
+    width: (POPUP_WIDTH - 80) / 7,
+    height: 26,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+    borderRadius: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  slipCellEmpty: {
+    width: (POPUP_WIDTH - 80) / 7,
+    height: 26,
+    backgroundColor: 'transparent',
+  },
+  slipCellMarked: {
+    backgroundColor: '#1e293b',
+    borderColor: '#0f172a',
+  },
+  slipCellText: {
+    fontSize: 10,
+    color: '#64748b',
+    fontWeight: '700',
+  },
+  slipCellTextMarked: {
+    color: '#ffffff',
+    fontWeight: '900',
+  },
+  slipCheckBar: {
+    position: 'absolute',
+    width: '80%',
+    height: 3,
+    backgroundColor: '#ef4444',
+    bottom: 2,
+    borderRadius: 1,
+  },
+
+  // 용지 오버레이 닷
+  overlayDotContainer: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    flexDirection: 'row',
+    gap: 2,
+  },
+  overlayDotRed: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#dc2626',
+  },
+  overlayDotBlue: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#0284c7',
+  },
+  overlayDotGreen: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#16a34a',
+  },
+
+  slipStatsPanel: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  slipStatRow: {
+    marginVertical: 2,
+  },
+  slipStatLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  slipStatValue: {
+    fontSize: 10,
+    color: '#1e3a8a',
+    fontWeight: 'bold',
+    marginTop: 1,
+  },
+  slipBadgeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+  },
+  slipDeadBadge: {
+    flex: 1,
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    paddingVertical: 4,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  slipDeadBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#b91c1c',
+  },
+  metricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+  },
+  metricItem: {
+    width: '48.5%',
+    backgroundColor: '#f1f5f9',
+    padding: 8,
+    borderRadius: 8,
+  },
+  metricItemFull: {
+    width: '100%',
+    backgroundColor: '#f1f5f9',
+    padding: 8,
+    borderRadius: 8,
+  },
+  metricLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '700',
+  },
+  metricValue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginTop: 2,
+  },
+  analysisSectionCard: {
+    backgroundColor: '#f8fafc',
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  analysisSectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1e293b',
+    marginBottom: 6,
+  },
+  rankWinsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  rankWinCol: {
+    alignItems: 'center',
+  },
+  rankWinLabel: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  rankWinValBlue: { fontSize: 13, fontWeight: '800', color: '#2563eb' },
+  rankWinValGreen: { fontSize: 13, fontWeight: '800', color: '#059669' },
+  rankWinValPurple: { fontSize: 13, fontWeight: '800', color: '#7c3aed' },
+  tableHeader: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingBottom: 4,
+    marginBottom: 4,
+  },
+  thText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 3,
+  },
+  microBall: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  microBallText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  tdText: {
+    fontSize: 11,
+  },
+  pairRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  pairRankBadge: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#d97706',
+  },
+  pairCountText: {
+    fontSize: 11,
+    color: '#475569',
+  },
+  scannerWrapper: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  scannerOverlay: {
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  scannerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 10,
+  },
+  scannerHeaderTitle: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  scannerCloseBtn: {
+    padding: 6,
+  },
+  scannerCloseIcon: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: 'bold',
+  },
+  scannerBody: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scanTargetBox: {
+    width: 240,
+    height: 240,
+    position: 'relative',
+  },
+  cornerBracket: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderColor: '#38bdf8',
+  },
+  bracketTL: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4 },
+  bracketTR: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4 },
+  bracketBL: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4 },
+  bracketBR: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4 },
+  scannerFooter: {
+    alignItems: 'center',
+    paddingBottom: 30,
+    paddingHorizontal: 20,
+  },
+  scannerGuideText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  scannerSubGuideText: {
+    color: '#94a3b8',
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  scannerBottomBtn: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingVertical: 10,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+  },
+  scannerBottomBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  searchRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginVertical: 6,
+  },
+  searchInput: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 12,
+  },
+  searchBtn: {
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  roundBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  roundBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  disabledText: {
+    color: '#cbd5e1',
+  },
+  currentRoundText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  winning15Scroll: {
+    maxHeight: 380,
+    marginVertical: 4,
+  },
+});
