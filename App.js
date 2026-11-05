@@ -178,6 +178,9 @@ const parseLottoQrUrl = (url) => {
 };
 
 export default function App() {
+  const gameLabels = ['A', 'B', 'C', 'D', 'E'];
+  const allNumbers = Array.from({ length: 45 }, (_, i) => i + 1);
+
   const [latestRound, setLatestRound] = useState(INITIAL_LATEST_ROUND);
   const [lottoCache, setLottoCache] = useState({});
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -496,8 +499,8 @@ export default function App() {
         bonusNum,
         titleText,
         subText,
-        sourceType,  // 'WINNING' 또는 'SAVED'
-        sourceIndex, // WINNING: 회차(round), SAVED: 인덱스(flatIndex)
+        sourceType,
+        sourceIndex,
         rank3Count,
         rank4Count,
         rank5Count,
@@ -1241,8 +1244,6 @@ export default function App() {
   };
 
   const latestWinningInfo = getLottoNumbersByRound(latestRound);
-  const gameLabels = ['A', 'B', 'C', 'D', 'E'];
-  const allNumbers = Array.from({ length: 45 }, (_, i) => i + 1);
 
   return (
     <View style={styles.fullScreenContainer}>
@@ -1327,7 +1328,7 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* 상단: 직접 번호 생성 버튼 (옵션 탭 위치로 변경) */}
+            {/* 상단: 직접 번호 생성 버튼 */}
             <TouchableOpacity
               style={styles.manualTopOptionBtn}
               onPress={() => {
@@ -1891,7 +1892,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 6] 전회차 당첨결과 모달 (우측상단 갱신 앞 1등판매점 네이버 검색 통합버튼 적용) */}
+      {/* [모달 6] 전회차 당첨결과 모달 */}
       <Modal
         visible={isWinningModalVisible}
         animationType="slide"
@@ -1907,7 +1908,6 @@ export default function App() {
               </View>
 
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                {/* 갱신 버튼 앞부분에 통합 배치된 1등 판매점 네이버 검색 버튼 */}
                 <TouchableOpacity
                   style={styles.naverTopIntegratedBtn}
                   onPress={() => openInNaverSearch(winningTopRound)}
@@ -2052,7 +2052,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 7] 당첨번호 & 저장번호 9가지 정밀 분석 대시보드 (이전/다음 즉시 이동 버튼 추가) */}
+      {/* [모달 7] 당첨번호 & 저장번호 9가지 정밀 분석 대시보드 */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -2075,7 +2075,6 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* 당첨번호 회차 간 즉시 이동 네비게이션 바 */}
             {analysisTargetData?.sourceType === 'WINNING' && (
               <View style={styles.analysisNavSubBar}>
                 <TouchableOpacity
@@ -2126,7 +2125,6 @@ export default function App() {
               </View>
             )}
 
-            {/* 저장번호 목록 간 즉시 이동 네비게이션 바 */}
             {analysisTargetData?.sourceType === 'SAVED' && (
               <View style={styles.analysisNavSubBar}>
                 <TouchableOpacity
@@ -2197,7 +2195,6 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 지표 그리드 (AC값 포함) */}
                 <View style={styles.metricGrid}>
                   <View style={styles.metricItem}>
                     <Text style={styles.metricLabel}>홀짝 비율</Text>
@@ -2557,8 +2554,6 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     position: 'relative',
   },
-
-  // 메인 화면 보관함 버튼 우측 상단 카운터 배지
   mainBadgeCounter: {
     position: 'absolute',
     top: -4,
@@ -2583,8 +2578,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
   },
-
-  // 저장목록 모달 헤더 카운터 배지
   savedModalCounterBadge: {
     backgroundColor: '#eff6ff',
     borderWidth: 1,
@@ -2598,8 +2591,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-
-  // 모달 6 상단 우측 1등 판매점 네이버 검색 통합 버튼
   naverTopIntegratedBtn: {
     backgroundColor: '#03c75a',
     paddingHorizontal: 10,
@@ -2612,7 +2603,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
   },
-
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.65)',
@@ -2658,8 +2648,6 @@ const styles = StyleSheet.create({
   },
   closeBtn: { padding: 6 },
   closeBtnText: { fontSize: 18, color: '#94a3b8', fontWeight: 'bold' },
-
-  // [신규] 정밀분석 내비게이션 바 (이전/다음 즉시 이동 컨트롤)
   analysisNavSubBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2697,8 +2685,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#0f172a',
   },
-
-  // 상단으로 이동한 직접 번호 생성 버튼
   manualTopOptionBtn: {
     backgroundColor: '#0f172a',
     paddingVertical: 10,
@@ -2713,8 +2699,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
-
-  // 하단 2개 생성 옵션 버튼 행 (통계 정밀 필터 & 기본추첨)
   twoOptionBtnRow: {
     flexDirection: 'row',
     gap: 8,
@@ -2747,7 +2731,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 2,
   },
-
   modalScroll: { maxHeight: 330, marginBottom: 8 },
   modalFooterRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
   confirmBtn: {
@@ -2765,7 +2748,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   btnTextWhite: { color: '#ffffff', fontWeight: '800', fontSize: 14 },
-
+  btnTextWhiteBold: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
   exportButtonGroup: {
     flexDirection: 'row',
     gap: 8,
@@ -2813,7 +2796,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
-
   centerModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.72)',
@@ -2888,7 +2870,6 @@ const styles = StyleSheet.create({
   bonusToggleBtnTextActive: {
     color: '#ffffff',
   },
-
   quickExcludeRow: {
     flexDirection: 'row',
     paddingHorizontal: 10,
@@ -2910,7 +2891,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#b91c1c',
   },
-
   excludeAnalysisTabRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2945,7 +2925,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '800',
   },
-
   autoOptionBtnRow: {
     paddingHorizontal: 10,
     paddingTop: 6,
@@ -2963,7 +2942,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#4338ca',
   },
-
   statsPanel: {
     backgroundColor: '#f8fafc',
     marginHorizontal: 10,
@@ -3024,7 +3002,6 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginTop: 2,
   },
-
   excludeBallWrapper: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -3309,4 +3286,428 @@ const styles = StyleSheet.create({
     borderColor: '#fca5a5',
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 6
+    borderRadius: 6,
+  },
+  singleGameDeleteText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#dc2626',
+  },
+  savedBallsRow: {
+    flexDirection: 'row',
+    gap: 4,
+    marginVertical: 4,
+  },
+  miniBall: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  miniBallText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  matchedBallHighlight: {
+    borderWidth: 2,
+    borderColor: '#dc2626',
+  },
+  bonusBallHighlight: {
+    borderWidth: 2,
+    borderColor: '#2563eb',
+  },
+  matchMark: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    fontSize: 8,
+    color: '#dc2626',
+    fontWeight: '900',
+  },
+  bonusMark: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    fontSize: 8,
+    color: '#2563eb',
+    fontWeight: '900',
+  },
+  historyStatsBox: {
+    marginTop: 4,
+  },
+  historyStatsTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  historyTotalText: {
+    color: '#dc2626',
+    fontWeight: '800',
+  },
+  historyDetailText: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  gameCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  badge: {
+    backgroundColor: '#1e293b',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  badgeText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  ballsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  ball: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  ballText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  roundItemCard: {
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e2e8f0',
+  },
+  roundItemTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  roundItemInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  roundNumberBadge: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  roundItemDateText: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  roundItemActionsRow: {
+    flexDirection: 'row',
+  },
+  miniBallsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  listMiniBall: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listMiniBallText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  miniPlusSign: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#94a3b8',
+    marginHorizontal: 1,
+  },
+  analysisSmallBtn: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  analysisSmallBtnText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  analysisBallsCard: {
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  analysisBallsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  analysisBall: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  analysisBallText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  analysisPlus: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#94a3b8',
+  },
+  metricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+  },
+  metricItem: {
+    width: '48.5%',
+    backgroundColor: '#f1f5f9',
+    padding: 8,
+    borderRadius: 8,
+  },
+  metricItemFull: {
+    width: '100%',
+    backgroundColor: '#f1f5f9',
+    padding: 8,
+    borderRadius: 8,
+  },
+  metricLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '700',
+  },
+  metricValue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginTop: 2,
+  },
+  analysisSectionCard: {
+    backgroundColor: '#f8fafc',
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  analysisSectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1e293b',
+    marginBottom: 6,
+  },
+  rankWinsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  rankWinCol: {
+    alignItems: 'center',
+  },
+  rankWinLabel: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  rankWinValBlue: { fontSize: 13, fontWeight: '800', color: '#2563eb' },
+  rankWinValGreen: { fontSize: 13, fontWeight: '800', color: '#059669' },
+  rankWinValPurple: { fontSize: 13, fontWeight: '800', color: '#7c3aed' },
+  tableHeader: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingBottom: 4,
+    marginBottom: 4,
+  },
+  thText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 3,
+  },
+  microBall: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  microBallText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  tdText: {
+    fontSize: 11,
+  },
+  pairRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  pairRankBadge: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#d97706',
+  },
+  pairCountText: {
+    fontSize: 11,
+    color: '#475569',
+  },
+  scannerWrapper: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  scannerOverlay: {
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  scannerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 10,
+  },
+  scannerHeaderTitle: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  scannerCloseBtn: {
+    padding: 6,
+  },
+  scannerCloseIcon: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: 'bold',
+  },
+  scannerBody: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scanTargetBox: {
+    width: 240,
+    height: 240,
+    position: 'relative',
+  },
+  cornerBracket: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderColor: '#38bdf8',
+  },
+  bracketTL: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4 },
+  bracketTR: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4 },
+  bracketBL: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4 },
+  bracketBR: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4 },
+  scannerFooter: {
+    alignItems: 'center',
+    paddingBottom: 30,
+    paddingHorizontal: 20,
+  },
+  scannerGuideText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  scannerSubGuideText: {
+    color: '#94a3b8',
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  scannerBottomBtn: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingVertical: 10,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+  },
+  scannerBottomBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  searchRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginVertical: 6,
+  },
+  searchInput: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 12,
+  },
+  searchBtn: {
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  roundBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  roundBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  disabledText: {
+    color: '#cbd5e1',
+  },
+  currentRoundText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  winning15Scroll: {
+    maxHeight: 380,
+    marginVertical: 4,
+  },
+});
