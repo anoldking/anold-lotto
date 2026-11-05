@@ -103,7 +103,6 @@ const generateBasicLottoSet = (excludedNumbers = []) => {
 // [20대 정밀 필터링 연산 유틸]
 // =================================================================
 
-// AC값 계산 (산술적 복잡도)
 const calculateACValue = (sorted) => {
   const diffs = new Set();
   for (let i = 0; i < sorted.length; i++) {
@@ -114,7 +113,6 @@ const calculateACValue = (sorted) => {
   return diffs.size - (sorted.length - 1);
 };
 
-// 7x7 용지 마킹 패턴 계산
 const getPaperDeadPattern = (numbers) => {
   const rowCounts = [0, 0, 0, 0, 0, 0, 0];
   const colCounts = [0, 0, 0, 0, 0, 0, 0];
@@ -132,20 +130,21 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 20대 핵심 조건 통합 판별기 (수정 최적화 반영)
+const hasDoubleConsecutiveCarryOver = (candidate, doubleCarryOverNumbers = []) => {
+  if (!doubleCarryOverNumbers || doubleCarryOverNumbers.length === 0) return false;
+  return candidate.some((n) => doubleCarryOverNumbers.includes(n));
+};
+
 const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
   const maxNum = sorted[5];
 
-  // 1. 시작수 1~15 이하 & 끝수 30~45 이상
   if (minNum > 15 || maxNum < 30) return false;
 
-  // 2. 최소-최대 고저차 (25 ~ 44 사이)
   const range = maxNum - minNum;
   if (range < 25 || range > 44) return false;
 
-  // 3. 인접한 수들의 가장 큰 차이값 (수정: 6 ~ 25 사이, 26 이상 차단)
   let maxAdjacentDiff = 0;
   for (let i = 0; i < sorted.length - 1; i++) {
     const diff = sorted[i + 1] - sorted[i];
@@ -153,39 +152,30 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   }
   if (maxAdjacentDiff < 6 || maxAdjacentDiff > 25) return false;
 
-  // 4. 번호 총합 (100 ~ 180 사이)
   const sum = sorted.reduce((acc, cur) => acc + cur, 0);
   if (sum < 100 || sum > 180) return false;
 
-  // 5. 홀짝 비율 (2:4, 3:3, 4:2)
   const oddCount = sorted.filter((n) => n % 2 !== 0).length;
   if (oddCount < 2 || oddCount > 4) return false;
 
-  // 6. 고저 비율 (22 이하: 저, 23 이상: 고 -> 2:4, 3:3, 4:2)
   const lowCount = sorted.filter((n) => n <= 22).length;
   if (lowCount < 2 || lowCount > 4) return false;
 
-  // 7. AC값 (7 ~ 10 사이)
   const ac = calculateACValue(sorted);
   if (ac < 7 || ac > 10) return false;
 
-  // 8. 소수(1 포함) 1~2개 허용, 나머지 합성수
   const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
   if (primeCount < 1 || primeCount > 2) return false;
 
-  // 9. 3의 배수 (1 ~ 3개 허용)
   const mult3Count = sorted.filter((n) => n % 3 === 0).length;
   if (mult3Count < 1 || mult3Count > 3) return false;
 
-  // 10. 5의 배수 (수정: 최대 2개 허용, 3개 이상 차단)
   const mult5Count = sorted.filter((n) => n % 5 === 0).length;
   if (mult5Count >= 3) return false;
 
-  // 11. 쌍둥이수 (최대 1개까지만 허용, 2개 이상 차단)
   const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
   if (twinCount >= 2) return false;
 
-  // 12. 동일 끝수 3개 이상 차단 (최대 2개까지만 허용)
   const lastDigitCounts = {};
   for (const n of sorted) {
     const d = n % 10;
@@ -193,12 +183,11 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
     if (lastDigitCounts[d] >= 3) return false;
   }
 
-  // 13. 연속번호 (3연번 차단 & 2연번은 최대 1쌍만 허용)
   let consecutivePairs = 0;
   for (let i = 0; i < sorted.length - 1; i++) {
     if (sorted[i + 1] - sorted[i] === 1) {
       if (i < sorted.length - 2 && sorted[i + 2] - sorted[i + 1] === 1) {
-        return false; // 3연번 차단
+        return false;
       }
       consecutivePairs++;
       i++;
@@ -206,7 +195,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   }
   if (consecutivePairs > 1) return false;
 
-  // 14. 10단위 5개 구간(단번/10번/20번/30번/40번) 멸 개수 (1 ~ 2개 구간 전멸)
   const sectionCounts = [0, 0, 0, 0, 0];
   sorted.forEach((n) => {
     if (n <= 9) sectionCounts[0]++;
@@ -218,47 +206,76 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const deadSections = sectionCounts.filter((cnt) => cnt === 0).length;
   if (deadSections < 1 || deadSections > 2) return false;
 
-  // 15. 용지 마킹 패턴 (가로 멸 2~4개 & 세로 멸 2~4개)
   const { deadRows, deadCols } = getPaperDeadPattern(sorted);
   if (deadRows < 2 || deadRows > 4) return false;
   if (deadCols < 2 || deadCols > 4) return false;
 
-  // 동적 통계 데이터 검증
   if (dynamicContext) {
     const { round1Numbers, doubleCarryOver, hot5w3, hot10w4, hot20w5, cold20w } = dynamicContext;
 
-    // 16. 이월수 2개 이상 차단 (직전 회차 번호는 최대 1개만 허용)
     if (round1Numbers && round1Numbers.length > 0) {
       const carryCount = sorted.filter((n) => round1Numbers.includes(n)).length;
       if (carryCount >= 2) return false;
     }
 
-    // 17. 2주 연속 이월수 차단 (직전 + 2주전 연속 출현 번호)
     if (doubleCarryOver && doubleCarryOver.length > 0) {
       if (sorted.some((n) => doubleCarryOver.includes(n))) return false;
     }
 
-    // 18. 5주간 3회 이상 출현 과열수 차단
     if (hot5w3 && hot5w3.length > 0) {
       if (sorted.some((n) => hot5w3.includes(n))) return false;
     }
 
-    // 19. 10주간 4회 이상 과열수 차단
     if (hot10w4 && hot10w4.length > 0) {
       if (sorted.some((n) => hot10w4.includes(n))) return false;
     }
 
-    // 20. 20주간 5회 이상 과열수 차단 & 20주간 미출현(콜드수) 2개 이상 차단 (수정: 최대 1개 허용)
     if (hot20w5 && hot20w5.length > 0) {
       if (sorted.some((n) => hot20w5.includes(n))) return false;
     }
     if (cold20w && cold20w.length > 0) {
       const coldCount = sorted.filter((n) => cold20w.includes(n)).length;
-      if (coldCount >= 2) return false; // 최대 1개 허용
+      if (coldCount >= 2) return false;
     }
   }
 
   return true;
+};
+
+// QR 파서
+const parseLottoQrUrl = (url) => {
+  try {
+    const vIndex = url.indexOf('?v=') !== -1 ? url.indexOf('?v=') + 3 : (url.indexOf('&v=') !== -1 ? url.indexOf('&v=') + 3 : -1);
+    if (vIndex === -1) return null;
+
+    const vParam = url.substring(vIndex).split('&')[0];
+    const roundMatch = vParam.match(/^(\d{1,5})/);
+    if (!roundMatch) return null;
+
+    const round = parseInt(roundMatch[1], 10);
+    const body = vParam.substring(roundMatch[1].length);
+
+    const rawGames = body.split(/[a-zA-Z]+/).filter((str) => str.length >= 12);
+
+    const parsedGames = rawGames.map((gameStr) => {
+      const numbers = [];
+      const chunk = gameStr.slice(0, 12);
+      for (let i = 0; i < 12; i += 2) {
+        const num = parseInt(chunk.substring(i, i + 2), 10);
+        if (num >= 1 && num <= 45) {
+          numbers.push(num);
+        }
+      }
+      return numbers.sort((a, b) => a - b);
+    }).filter((g) => g.length === 6);
+
+    if (parsedGames.length === 0) return null;
+
+    return { round, games: parsedGames };
+  } catch (err) {
+    console.error('QR 파싱 실패:', err);
+    return null;
+  }
 };
 
 export default function App() {
@@ -274,7 +291,6 @@ export default function App() {
   const [generationTitle, setGenerationTitle] = useState('🎉 번호 추첨 완료');
   const [activeGenOption, setActiveGenOption] = useState('OPT_STRICT');
 
-  // 제외수 전용 상태
   const [excludedNumbers, setExcludedNumbers] = useState([]);
   const [includeBonusInExclude, setIncludeBonusInExclude] = useState(false);
   const [excludeAnalysisRounds, setExcludeAnalysisRounds] = useState(10);
@@ -495,7 +511,6 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
-  // 20대 조건 완벽 적용 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -574,6 +589,7 @@ export default function App() {
     Alert.alert('스마트 추천 제외수 적용', `총 ${finalResult.length}개 추천 번호가 제외수로 설정되었습니다.\n\n번호: ${finalResult.join(', ')}`);
   };
 
+  // ================= [공용 정밀 분석 데이터 생성기] =================
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -666,6 +682,41 @@ export default function App() {
       const numbers1WeekAgo = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
       const numbers2WeeksAgo = targetBaseRound > 2 ? getLottoNumbersByRound(targetBaseRound - 2)?.numbers || [] : [];
 
+      // [신규 계산] 소수 / 합성수
+      const primeNumbers = nums.filter((n) => PRIME_SET_WITH_ONE.has(n));
+      const compositeNumbers = nums.filter((n) => !PRIME_SET_WITH_ONE.has(n));
+
+      // [신규 계산] 3의 배수 / 5의 배수
+      const mult3Numbers = nums.filter((n) => n % 3 === 0);
+      const mult5Numbers = nums.filter((n) => n % 5 === 0);
+
+      // [신규 계산] 쌍둥이수 (11, 22, 33, 44)
+      const twinNumbers = nums.filter((n) => TWIN_NUMBERS.has(n));
+
+      // [신규 계산] 동일 끝수 쌍
+      const endDigitMap = {};
+      nums.forEach((n) => {
+        const d = n % 10;
+        if (!endDigitMap[d]) endDigitMap[d] = [];
+        endDigitMap[d].push(n);
+      });
+      const sameEndPairs = Object.entries(endDigitMap).filter(([_, list]) => list.length >= 2);
+
+      // [신규 계산] 연속번호(연번) 쌍
+      const consecutivePairsList = [];
+      for (let i = 0; i < nums.length - 1; i++) {
+        if (nums[i + 1] - nums[i] === 1) {
+          consecutivePairsList.push(`${nums[i]}-${nums[i + 1]}`);
+        }
+      }
+
+      // [신규 계산] 핫수(최단기 출현) & 콜드수(최장기 미출)
+      const minAbsenceVal = Math.min(...nums.map((n) => absenceWeeks[n]));
+      const hotNumbersInSet = nums.filter((n) => absenceWeeks[n] === minAbsenceVal);
+
+      const maxAbsenceVal = Math.max(...nums.map((n) => absenceWeeks[n]));
+      const coldNumbersInSet = nums.filter((n) => absenceWeeks[n] === maxAbsenceVal);
+
       return {
         numbers: nums,
         bonusNum,
@@ -693,6 +744,18 @@ export default function App() {
         colCounts,
         deadRowCount: deadRows,
         deadColCount: deadCols,
+        // 패턴 & 특수수 지표
+        primeNumbers,
+        compositeNumbers,
+        mult3Numbers,
+        mult5Numbers,
+        twinNumbers,
+        sameEndPairs,
+        consecutivePairsList,
+        minAbsenceVal,
+        hotNumbersInSet,
+        maxAbsenceVal,
+        coldNumbersInSet,
       };
     },
     [latestRound, getLottoNumbersByRound]
@@ -733,7 +796,7 @@ export default function App() {
       roundData.numbers,
       targetRound,
       `제 ${targetRound}회 당첨번호 정밀 분석`,
-      `${roundData.drwNoDate} 공식 결과 9가지 심층 데이터`,
+      `${roundData.drwNoDate} 공식 결과 심층 데이터`,
       roundData.bnusNo,
       'WINNING',
       targetRound
@@ -1496,204 +1559,202 @@ export default function App() {
         transparent={true}
         onRequestClose={() => setIsSavedModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.bottomModalContainer}>
-            <View style={styles.modalHeader}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={styles.modalTitle}>📂 내가 저장한 번호 목록</Text>
-                <View style={styles.savedModalCounterBadge}>
-                  <Text style={styles.savedModalCounterBadgeText}>총 {totalSavedGamesCount}개</Text>
-                </View>
-              </View>
-              <TouchableOpacity onPress={() => setIsSavedModalVisible(false)} style={styles.closeBtn}>
-                <Text style={styles.closeBtnText}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={[styles.modalSubtitle, { marginBottom: 10 }]}>
-              최신 제{latestRound}회 결과 및 누적 당첨 분석
-            </Text>
-
-            <View style={styles.exportButtonGroup}>
-              <TouchableOpacity style={styles.exportPdfBtn} onPress={handleExportPDF} activeOpacity={0.8}>
-                <Text style={styles.exportPdfBtnText}>📄 PDF</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.exportExcelBtn} onPress={handleExportExcel} activeOpacity={0.8}>
-                <Text style={styles.exportExcelBtnText}>📊 엑셀</Text>
-              </TouchableOpacity>
-              {savedSets.length > 0 && (
-                <TouchableOpacity style={styles.deleteAllSavedBtn} onPress={handleDeleteAllSavedSets} activeOpacity={0.8}>
-                  <Text style={styles.deleteAllSavedBtnText}>🗑️ 전체삭제</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {savedSets.length > 0 && (
-              <TouchableOpacity style={styles.oppositeBannerBtn} onPress={handleGenerateOpposite} activeOpacity={0.85}>
-                <Text style={styles.oppositeBannerBtnTitle}>⚡ 저장 안 된 번호로만 뽑기</Text>
-                <Text style={styles.oppositeBannerBtnSub}>[반대번호] 5세트 생성 ➔</Text>
-              </TouchableOpacity>
-            )}
-
-            <View style={styles.winningReferenceBar}>
-              <View style={styles.winningRefHeaderRow}>
-                <Text style={styles.winningReferenceTitle}>
-                  최신 기준: 제{latestRound}회 ({latestWinningInfo.drwNoDate})
-                </Text>
-                <TouchableOpacity style={styles.smallRefreshTouch} onPress={handleRefreshLatestRound} disabled={isRefreshing}>
-                  {isRefreshing ? (
-                    <ActivityIndicator size="small" color="#2563eb" />
-                  ) : (
-                    <Text style={styles.smallRefreshTouchText}>🔄 새로고침</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-              <View style={styles.winningRefBallsRow}>
-                {latestWinningInfo.numbers.map((n) => (
-                  <View key={`ref-${n}`} style={[styles.refBall, { backgroundColor: getBallColor(n) }]}>
-                    <Text style={styles.refBallText}>{n}</Text>
-                  </View>
-                ))}
-                <Text style={styles.refPlus}>+</Text>
-                <View style={[styles.refBall, { backgroundColor: getBallColor(latestWinningInfo.bnusNo) }]}>
-                  <Text style={styles.refBallText}>{latestWinningInfo.bnusNo}</Text>
-                </View>
+        <View style={styles.bottomModalContainer}>
+          <View style={styles.modalHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={styles.modalTitle}>📂 내가 저장한 번호 목록</Text>
+              <View style={styles.savedModalCounterBadge}>
+                <Text style={styles.savedModalCounterBadgeText}>총 {totalSavedGamesCount}개</Text>
               </View>
             </View>
-
-            <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
-              {savedSets.length === 0 ? (
-                <View style={styles.emptyBox}>
-                  <Text style={styles.emptyText}>저장된 로또 번호가 없습니다.</Text>
-                  <Text style={styles.emptySubText}>번호를 생성한 후 '기기에 저장'을 눌러보세요!</Text>
-                </View>
-              ) : (
-                savedSets.map((item) => (
-                  <View key={item.id} style={styles.savedCard}>
-                    <View style={styles.savedCardHeader}>
-                      <Text style={styles.savedDate}>📅 {item.date}</Text>
-                      <TouchableOpacity
-                        onPress={() => {
-                          Alert.alert('세트 삭제', '이 묶음의 번호를 모두 삭제하시겠습니까?', [
-                            { text: '취소', style: 'cancel' },
-                            {
-                              text: '삭제',
-                              style: 'destructive',
-                              onPress: async () => {
-                                const updated = savedSets.filter((s) => s.id !== item.id);
-                                setSavedSets(updated);
-                                await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-                              },
-                            },
-                          ]);
-                        }}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      >
-                        <Text style={styles.delText}>묶음삭제</Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {item.games.map((g, gIdx) => {
-                      const lastResult = checkSingleRoundResult(
-                        g,
-                        latestWinningInfo.numbers,
-                        latestWinningInfo.bnusNo
-                      );
-                      const hist = calculateHistoricalWins(g);
-                      const gameLabel = item.games.length === 1 ? '수동' : gameLabels[gIdx];
-
-                      return (
-                        <View key={`saved-${item.id}-${gIdx}`} style={styles.savedGameItem}>
-                          <View style={styles.savedRowTop}>
-                            <View style={styles.gameTopLeftGroup}>
-                              <View style={styles.miniBadge}>
-                                <Text style={styles.miniBadgeText}>{gameLabel}</Text>
-                              </View>
-                              <View style={[styles.resultBadge, { backgroundColor: lastResult.bg }]}>
-                                <Text style={[styles.resultBadgeText, { color: lastResult.color }]}>
-                                  {lastResult.rank}
-                                </Text>
-                              </View>
-                            </View>
-
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                              <TouchableOpacity
-                                style={styles.analysisSmallBtn}
-                                onPress={() => {
-                                  const flatList = getFlatSavedGames();
-                                  const foundIdx = flatList.findIndex((fg) => fg.id === item.id && fg.gIdx === gIdx);
-                                  const analysisResult = calculateNumbersAnalysis(
-                                    g,
-                                    latestRound,
-                                    `저장 번호 정밀 분석 (${gameLabel})`,
-                                    `저장일시: ${item.date} | 동행복권 제${latestRound}회차 기준 통계`,
-                                    null,
-                                    'SAVED',
-                                    foundIdx !== -1 ? foundIdx : 0
-                                  );
-                                  setAnalysisTargetData(analysisResult);
-                                  setIsAnalysisModalVisible(true);
-                                }}
-                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                activeOpacity={0.7}
-                              >
-                                <Text style={styles.analysisSmallBtnText}>📊 정밀분석</Text>
-                              </TouchableOpacity>
-
-                              <TouchableOpacity
-                                style={styles.singleGameDeleteTouch}
-                                onPress={() => handleDeleteSingleGame(item.id, gIdx)}
-                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                activeOpacity={0.7}
-                              >
-                                <Text style={styles.singleGameDeleteText}>✕ 삭제</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-
-                          <View style={styles.savedBallsRow}>
-                            {g.map((n) => {
-                              const isMatched = latestWinningInfo.numbers.includes(n);
-                              const isBonusMatched = n === latestWinningInfo.bnusNo;
-                              return (
-                                <View
-                                  key={`s-ball-${n}`}
-                                  style={[
-                                    styles.miniBall,
-                                    { backgroundColor: getBallColor(n) },
-                                    isMatched && styles.matchedBallHighlight,
-                                    isBonusMatched && styles.bonusBallHighlight,
-                                  ]}
-                                >
-                                  <Text style={styles.miniBallText}>{n}</Text>
-                                  {isMatched && <Text style={styles.matchMark}>✓</Text>}
-                                  {isBonusMatched && <Text style={styles.bonusMark}>B</Text>}
-                                </View>
-                              );
-                            })}
-                          </View>
-
-                          <View style={styles.historyStatsBox}>
-                            <Text style={styles.historyStatsTitle}>
-                              📊 동행복권 누적 당첨 횟수:
-                              <Text style={styles.historyTotalText}> 총 {hist.total}회</Text>
-                            </Text>
-                            <Text style={styles.historyDetailText}>
-                              (1등: {hist.r1}회 / 2등: {hist.r2}회 / 3등: {hist.r3}회 / 4등: {hist.r4}회 / 5등: {hist.r5}회)
-                            </Text>
-                          </View>
-                        </View>
-                      );
-                    })}
-                  </View>
-                ))
-              )}
-            </ScrollView>
-
-            <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsSavedModalVisible(false)}>
-              <Text style={styles.btnTextWhite}>닫기</Text>
+            <TouchableOpacity onPress={() => setIsSavedModalVisible(false)} style={styles.closeBtn}>
+              <Text style={styles.closeBtnText}>✕</Text>
             </TouchableOpacity>
           </View>
+
+          <Text style={[styles.modalSubtitle, { marginBottom: 10 }]}>
+            최신 제{latestRound}회 결과 및 누적 당첨 분석
+          </Text>
+
+          <View style={styles.exportButtonGroup}>
+            <TouchableOpacity style={styles.exportPdfBtn} onPress={handleExportPDF} activeOpacity={0.8}>
+              <Text style={styles.exportPdfBtnText}>📄 PDF</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.exportExcelBtn} onPress={handleExportExcel} activeOpacity={0.8}>
+              <Text style={styles.exportExcelBtnText}>📊 엑셀</Text>
+            </TouchableOpacity>
+            {savedSets.length > 0 && (
+              <TouchableOpacity style={styles.deleteAllSavedBtn} onPress={handleDeleteAllSavedSets} activeOpacity={0.8}>
+                <Text style={styles.deleteAllSavedBtnText}>🗑️ 전체삭제</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {savedSets.length > 0 && (
+            <TouchableOpacity style={styles.oppositeBannerBtn} onPress={handleGenerateOpposite} activeOpacity={0.85}>
+              <Text style={styles.oppositeBannerBtnTitle}>⚡ 저장 안 된 번호로만 뽑기</Text>
+              <Text style={styles.oppositeBannerBtnSub}>[반대번호] 5세트 생성 ➔</Text>
+            </TouchableOpacity>
+          )}
+
+          <View style={styles.winningReferenceBar}>
+            <View style={styles.winningRefHeaderRow}>
+              <Text style={styles.winningReferenceTitle}>
+                최신 기준: 제{latestRound}회 ({latestWinningInfo.drwNoDate})
+              </Text>
+              <TouchableOpacity style={styles.smallRefreshTouch} onPress={handleRefreshLatestRound} disabled={isRefreshing}>
+                {isRefreshing ? (
+                  <ActivityIndicator size="small" color="#2563eb" />
+                ) : (
+                  <Text style={styles.smallRefreshTouchText}>🔄 새로고침</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            <View style={styles.winningRefBallsRow}>
+              {latestWinningInfo.numbers.map((n) => (
+                <View key={`ref-${n}`} style={[styles.refBall, { backgroundColor: getBallColor(n) }]}>
+                  <Text style={styles.refBallText}>{n}</Text>
+                </View>
+              ))}
+              <Text style={styles.refPlus}>+</Text>
+              <View style={[styles.refBall, { backgroundColor: getBallColor(latestWinningInfo.bnusNo) }]}>
+                <Text style={styles.refBallText}>{latestWinningInfo.bnusNo}</Text>
+              </View>
+            </View>
+          </View>
+
+          <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+            {savedSets.length === 0 ? (
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyText}>저장된 로또 번호가 없습니다.</Text>
+                <Text style={styles.emptySubText}>번호를 생성한 후 '기기에 저장'을 눌러보세요!</Text>
+              </View>
+            ) : (
+              savedSets.map((item) => (
+                <View key={item.id} style={styles.savedCard}>
+                  <View style={styles.savedCardHeader}>
+                    <Text style={styles.savedDate}>📅 {item.date}</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        Alert.alert('세트 삭제', '이 묶음의 번호를 모두 삭제하시겠습니까?', [
+                          { text: '취소', style: 'cancel' },
+                          {
+                            text: '삭제',
+                            style: 'destructive',
+                            onPress: async () => {
+                              const updated = savedSets.filter((s) => s.id !== item.id);
+                              setSavedSets(updated);
+                              await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+                            },
+                          },
+                        ]);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Text style={styles.delText}>묶음삭제</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {item.games.map((g, gIdx) => {
+                    const lastResult = checkSingleRoundResult(
+                      g,
+                      latestWinningInfo.numbers,
+                      latestWinningInfo.bnusNo
+                    );
+                    const hist = calculateHistoricalWins(g);
+                    const gameLabel = item.games.length === 1 ? '수동' : gameLabels[gIdx];
+
+                    return (
+                      <View key={`saved-${item.id}-${gIdx}`} style={styles.savedGameItem}>
+                        <View style={styles.savedRowTop}>
+                          <View style={styles.gameTopLeftGroup}>
+                            <View style={styles.miniBadge}>
+                              <Text style={styles.miniBadgeText}>{gameLabel}</Text>
+                            </View>
+                            <View style={[styles.resultBadge, { backgroundColor: lastResult.bg }]}>
+                              <Text style={[styles.resultBadgeText, { color: lastResult.color }]}>
+                                {lastResult.rank}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <TouchableOpacity
+                              style={styles.analysisSmallBtn}
+                              onPress={() => {
+                                const flatList = getFlatSavedGames();
+                                const foundIdx = flatList.findIndex((fg) => fg.id === item.id && fg.gIdx === gIdx);
+                                const analysisResult = calculateNumbersAnalysis(
+                                  g,
+                                  latestRound,
+                                  `저장 번호 정밀 분석 (${gameLabel})`,
+                                  `저장일시: ${item.date} | 동행복권 제${latestRound}회차 기준 통계`,
+                                  null,
+                                  'SAVED',
+                                  foundIdx !== -1 ? foundIdx : 0
+                                );
+                                setAnalysisTargetData(analysisResult);
+                                setIsAnalysisModalVisible(true);
+                              }}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.analysisSmallBtnText}>📊 정밀분석</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={styles.singleGameDeleteTouch}
+                              onPress={() => handleDeleteSingleGame(item.id, gIdx)}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.singleGameDeleteText}>✕ 삭제</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+
+                        <View style={styles.savedBallsRow}>
+                          {g.map((n) => {
+                            const isMatched = latestWinningInfo.numbers.includes(n);
+                            const isBonusMatched = n === latestWinningInfo.bnusNo;
+                            return (
+                              <View
+                                key={`s-ball-${n}`}
+                                style={[
+                                  styles.miniBall,
+                                  { backgroundColor: getBallColor(n) },
+                                  isMatched && styles.matchedBallHighlight,
+                                  isBonusMatched && styles.bonusBallHighlight,
+                                ]}
+                              >
+                                <Text style={styles.miniBallText}>{n}</Text>
+                                {isMatched && <Text style={styles.matchMark}>✓</Text>}
+                                {isBonusMatched && <Text style={styles.bonusMark}>B</Text>}
+                              </View>
+                            );
+                          })}
+                        </View>
+
+                        <View style={styles.historyStatsBox}>
+                          <Text style={styles.historyStatsTitle}>
+                            📊 동행복권 누적 당첨 횟수:
+                            <Text style={styles.historyTotalText}> 총 {hist.total}회</Text>
+                          </Text>
+                          <Text style={styles.historyDetailText}>
+                            (1등: {hist.r1}회 / 2등: {hist.r2}회 / 3등: {hist.r3}회 / 4등: {hist.r4}회 / 5등: {hist.r5}회)
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              ))
+            )}
+          </ScrollView>
+
+          <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsSavedModalVisible(false)}>
+            <Text style={styles.btnTextWhite}>닫기</Text>
+          </TouchableOpacity>
         </View>
       </Modal>
 
@@ -1865,6 +1926,7 @@ export default function App() {
                 </TouchableOpacity>
               </View>
 
+              {/* 1~45 전체 로또 볼 선택 영역 */}
               <View style={styles.excludeBallWrapper}>
                 {allNumbers.map((num) => {
                   const isExcluded = excludedNumbers.includes(num);
@@ -2122,7 +2184,7 @@ export default function App() {
                               roundData.numbers,
                               r,
                               `제 ${r}회 당첨번호 정밀 분석`,
-                              `${roundData.drwNoDate} 공식 결과 9가지 심층 데이터`,
+                              `${roundData.drwNoDate} 공식 결과 심층 데이터`,
                               roundData.bnusNo,
                               'WINNING',
                               r
@@ -2171,7 +2233,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 + 용지 패턴표 (보너스 삭제 & 이번주/1주전/2주전 마킹 토글) */}
+      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 + 요청된 심층 지표 완벽 반영 */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -2296,7 +2358,7 @@ export default function App() {
 
             {analysisTargetData && (
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
-                {/* 6개 번호 표시 바 */}
+                {/* 6개 번호 볼 표시 바 */}
                 <View style={styles.analysisBallsCard}>
                   <View style={styles.analysisBallsRow}>
                     {analysisTargetData.numbers.map((n) => (
@@ -2312,6 +2374,99 @@ export default function App() {
                         </View>
                       </>
                     )}
+                  </View>
+                </View>
+
+                {/* [신규 핵심] 요청된 특수수 및 패턴 심층 분석 대시보드 카드 */}
+                <View style={styles.analysisSectionCard}>
+                  <Text style={styles.analysisSectionTitle}>
+                    🔍 특수수 및 핵심 패턴 심층 지표
+                  </Text>
+
+                  <View style={styles.detailMetricGrid}>
+                    {/* 1. 소수 / 합성수 */}
+                    <View style={styles.detailMetricCard}>
+                      <Text style={styles.detailMetricHeader}>소수 & 합성수 (1포함)</Text>
+                      <Text style={styles.detailMetricValue}>
+                        소수 <Text style={{ color: '#0284c7', fontWeight: '900' }}>{analysisTargetData.primeNumbers.length}개</Text> : 합성수 <Text style={{ color: '#475569', fontWeight: '900' }}>{analysisTargetData.compositeNumbers.length}개</Text>
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        {analysisTargetData.primeNumbers.length > 0 ? `소수: [${analysisTargetData.primeNumbers.join(', ')}]` : '소수 없음'}
+                      </Text>
+                    </View>
+
+                    {/* 2. 3의 배수 & 5의 배수 */}
+                    <View style={styles.detailMetricCard}>
+                      <Text style={styles.detailMetricHeader}>3의 배수 & 5의 배수</Text>
+                      <Text style={styles.detailMetricValue}>
+                        3배수 <Text style={{ color: '#16a34a', fontWeight: '900' }}>{analysisTargetData.mult3Numbers.length}개</Text> | 5배수 <Text style={{ color: '#d97706', fontWeight: '900' }}>{analysisTargetData.mult5Numbers.length}개</Text>
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        {analysisTargetData.mult5Numbers.length > 0 ? `5배수: [${analysisTargetData.mult5Numbers.join(', ')}]` : '5배수 없음'}
+                      </Text>
+                    </View>
+
+                    {/* 3. 쌍둥이수 & 동일 끝수 */}
+                    <View style={styles.detailMetricCard}>
+                      <Text style={styles.detailMetricHeader}>쌍둥이수 (11,22,33,44)</Text>
+                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.twinNumbers.length > 0 ? '#7c3aed' : '#64748b' }]}>
+                        {analysisTargetData.twinNumbers.length > 0 ? `총 ${analysisTargetData.twinNumbers.length}개 [${analysisTargetData.twinNumbers.join(', ')}]` : '없음 (0개)'}
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        {analysisTargetData.twinNumbers.length >= 2 ? '⚠️ 과밀 출현' : '안정 밸런스'}
+                      </Text>
+                    </View>
+
+                    {/* 4. 동일 끝수 쌍 */}
+                    <View style={styles.detailMetricCard}>
+                      <Text style={styles.detailMetricHeader}>동일 끝수 중복 현황</Text>
+                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.sameEndPairs.length > 0 ? '#dc2626' : '#64748b' }]}>
+                        {analysisTargetData.sameEndPairs.length > 0
+                          ? analysisTargetData.sameEndPairs.map(([d, list]) => `${d}끝(${list.length}개)`).join(', ')
+                          : '끝수 중복 없음'}
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        {analysisTargetData.sameEndPairs.length > 0
+                          ? analysisTargetData.sameEndPairs.map(([_, list]) => `[${list.join(',')}]`).join(' ')
+                          : '모든 번호 끝수 고유'}
+                      </Text>
+                    </View>
+
+                    {/* 5. 연번(연속번호) 개수 */}
+                    <View style={styles.detailMetricCardFull}>
+                      <Text style={styles.detailMetricHeader}>연속번호(연번) 구성</Text>
+                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.consecutivePairsList.length > 0 ? '#2563eb' : '#64748b' }]}>
+                        {analysisTargetData.consecutivePairsList.length > 0
+                          ? `총 ${analysisTargetData.consecutivePairsList.length}쌍 출현 [${analysisTargetData.consecutivePairsList.join(', ')}]`
+                          : '연속 번호 없음 (단독 번호)'}
+                      </Text>
+                    </View>
+
+                    {/* 6. 핫수(최단기) & 콜드수(최장기) */}
+                    <View style={styles.detailMetricCardFull}>
+                      <Text style={styles.detailMetricHeader}>🔥 핫수(최단기 출현) & ❄️ 콜드수(최장기 미출)</Text>
+                      <View style={styles.hotColdRow}>
+                        <View style={styles.hotBadgeBox}>
+                          <Text style={styles.hotBadgeTitle}>🔥 핫수 (최단기 출현)</Text>
+                          <Text style={styles.hotBadgeNum}>
+                            {analysisTargetData.hotNumbersInSet.join(', ')}번
+                          </Text>
+                          <Text style={styles.hotBadgeSub}>
+                            {analysisTargetData.minAbsenceVal === 0 ? '직전 회차 출현수' : `${analysisTargetData.minAbsenceVal}주 만에 출현`}
+                          </Text>
+                        </View>
+
+                        <View style={styles.coldBadgeBox}>
+                          <Text style={styles.coldBadgeTitle}>❄️ 콜드수 (최장기 미출)</Text>
+                          <Text style={styles.coldBadgeNum}>
+                            {analysisTargetData.coldNumbersInSet.join(', ')}번
+                          </Text>
+                          <Text style={styles.coldBadgeSub}>
+                            {analysisTargetData.maxAbsenceVal === 0 ? '직전 회차 출현' : `${analysisTargetData.maxAbsenceVal}주 미출현 후 출현`}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
                   </View>
                 </View>
 
@@ -3689,6 +3844,103 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#94a3b8',
   },
+
+  // 신규 특수수 & 패턴 심층 분석 카드 스타일
+  detailMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+  detailMetricCard: {
+    width: '48.5%',
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  detailMetricCardFull: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  detailMetricHeader: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    marginBottom: 3,
+  },
+  detailMetricValue: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  detailMetricSub: {
+    fontSize: 10,
+    color: '#94a3b8',
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  hotColdRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  hotBadgeBox: {
+    flex: 1,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 6,
+    padding: 6,
+    alignItems: 'center',
+  },
+  hotBadgeTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#b91c1c',
+  },
+  hotBadgeNum: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#dc2626',
+    marginVertical: 1,
+  },
+  hotBadgeSub: {
+    fontSize: 9.5,
+    color: '#7f1d1d',
+    fontWeight: '600',
+  },
+  coldBadgeBox: {
+    flex: 1,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 6,
+    padding: 6,
+    alignItems: 'center',
+  },
+  coldBadgeTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1d4ed8',
+  },
+  coldBadgeNum: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#2563eb',
+    marginVertical: 1,
+  },
+  coldBadgeSub: {
+    fontSize: 9.5,
+    color: '#1e3a8a',
+    fontWeight: '600',
+  },
+
   slipCardHeader: {
     marginBottom: 6,
   },
