@@ -240,7 +240,7 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
     if (deadCols < 2 || deadCols > 4) return false;
   }
 
-  // 이월수 조건 검증
+  // 이월수 조건 검증 (최신 회차 기준)
   if (dynamicContext) {
     const { round1Numbers, doubleCarryOver } = dynamicContext;
 
@@ -331,7 +331,7 @@ export default function App() {
 
   const [maxPrimeCount, setMaxPrimeCount] = useState(3);
 
-  // 용지 마킹 패턴표 토글: [🔴 이번주], [🔵 1주 전], [🟢 2주 전]
+  // 용지 마킹 패턴표 토글: [🔴 이번주], [🔵 1주 전], [🟢 2주 전] (최신 회차 기준)
   const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
   const [showPattern1WeekAgo, setShowPattern1WeekAgo] = useState(false);
   const [showPattern2WeeksAgo, setShowPattern2WeeksAgo] = useState(false);
@@ -502,6 +502,7 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
+  // 최신 회차(latestRound) 기준 동적 통계 데이터 생성
   const getDynamicContextData = useCallback(() => {
     const round1 = getLottoNumbersByRound(latestRound);
     const round2 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1) : null;
@@ -545,7 +546,7 @@ export default function App() {
     }));
   };
 
-  // 최근 회차 포함 기준 N주간 M회 이상 출현한 번호 계산 유틸
+  // 최신 회차(latestRound) 포함 기준 N주간 M회 이상 출현한 번호 계산
   const getOverheatedNumbers = useCallback(
     (weekCount, minOccurrences) => {
       const counts = {};
@@ -571,7 +572,7 @@ export default function App() {
     [latestRound, includeBonusInExclude, getLottoNumbersByRound]
   );
 
-  // [신규] 최근 N주간 한 번도 출현하지 않은 미출현(콜드) 번호 계산 유틸
+  // 최신 회차(latestRound) 포함 기준 N주간 미출현 번호 계산
   const getColdNumbers = useCallback(
     (weekCount) => {
       const appearedSet = new Set();
@@ -589,7 +590,6 @@ export default function App() {
     [latestRound, includeBonusInExclude, getLottoNumbersByRound, allNumbers]
   );
 
-  // 과열수 번호를 제외수 목록에 추가하는 핸들러
   const handleAddOverheatedToExclude = (weekCount, minOccurrences, label) => {
     const matched = getOverheatedNumbers(weekCount, minOccurrences);
     if (matched.length === 0) {
@@ -610,7 +610,6 @@ export default function App() {
     );
   };
 
-  // [신규] N주간 미출현 번호를 제외수에 추가하는 핸들러
   const handleAddColdToExclude = (weekCount, label) => {
     const matched = getColdNumbers(weekCount);
     if (matched.length === 0) {
@@ -699,6 +698,7 @@ export default function App() {
     Alert.alert('스마트 추천 제외수 적용', `총 ${finalResult.length}개 추천 번호가 제외수로 설정되었습니다.\n\n번호: ${finalResult.join(', ')}`);
   };
 
+  // ================= [공용 정밀 분석 데이터 생성기 (최신 당첨번호 최우선 기준)] =================
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -706,6 +706,7 @@ export default function App() {
       const nums = [...targetNumbers].sort((a, b) => a - b);
       const numSet = new Set(nums);
 
+      // 누적 등수별 당첨 횟수 (1회부터 최신 회차 latestRound까지)
       let rank3Count = 0;
       let rank4Count = 0;
       let rank5Count = 0;
@@ -725,18 +726,28 @@ export default function App() {
       const lowCount = nums.filter((n) => n <= 22).length;
       const highCount = 6 - lowCount;
 
+      // [핵심 변경] 이월수/일치수 기준: 항상 가장 최근 공식 당첨번호(latestRound)와 비교!
+      // 만약 대상이 최신 회차(latestRound) 당첨번호 그 자체라면, 직전(latestRound - 1) 회차와의 이월수를 계산
       let carryOverNumbers = [];
-      if (baseRound > 1) {
-        const prevData = getLottoNumbersByRound(baseRound - 1);
-        if (prevData && prevData.numbers && !prevData.isPending) {
-          carryOverNumbers = nums.filter((n) => prevData.numbers.includes(n));
+      const latestOfficialData = getLottoNumbersByRound(latestRound);
+
+      if (latestOfficialData && latestOfficialData.numbers && !latestOfficialData.isPending) {
+        if (sourceType === 'WINNING' && sourceIndex === latestRound) {
+          const prevRoundData = getLottoNumbersByRound(latestRound - 1);
+          if (prevRoundData && prevRoundData.numbers && !prevRoundData.isPending) {
+            carryOverNumbers = nums.filter((n) => prevRoundData.numbers.includes(n));
+          }
+        } else {
+          // 저장번호 및 과거 회차 당첨번호 모두 최신 당첨번호(latestRound)와 겹치는 번호를 이월수로 표시
+          carryOverNumbers = nums.filter((n) => latestOfficialData.numbers.includes(n));
         }
       }
 
+      // [핵심 변경] 최근 30회 출현 빈도: 항상 최신 회차(latestRound) 기준 최근 30회 집계
       const recent30Counts = {};
       nums.forEach((n) => (recent30Counts[n] = 0));
-      const startR = Math.max(1, baseRound - 30);
-      for (let r = baseRound; r >= startR; r--) {
+      const startR = Math.max(1, latestRound - 30);
+      for (let r = latestRound; r >= startR; r--) {
         const rData = getLottoNumbersByRound(r);
         if (rData && rData.numbers && !rData.isPending) {
           rData.numbers.forEach((n) => {
@@ -747,10 +758,11 @@ export default function App() {
         }
       }
 
+      // [핵심 변경] 미출현 주기(핫수/콜드수): 항상 최신 회차(latestRound) 기준으로 역산 계산
       const absenceWeeks = {};
       nums.forEach((n) => {
         let count = 0;
-        for (let r = baseRound - 1; r >= 1; r--) {
+        for (let r = latestRound; r >= 1; r--) {
           const rData = getLottoNumbersByRound(r);
           if (rData && rData.numbers && !rData.isPending && rData.numbers.includes(n)) {
             break;
@@ -786,10 +798,10 @@ export default function App() {
       const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 3);
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
-      const targetBaseRound = sourceType === 'WINNING' ? baseRound : latestRound;
-      const numbersThisWeek = getLottoNumbersByRound(targetBaseRound)?.numbers || [];
-      const numbers1WeekAgo = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
-      const numbers2WeeksAgo = targetBaseRound > 2 ? getLottoNumbersByRound(targetBaseRound - 2)?.numbers || [] : [];
+      // [핵심 변경] 용지 마킹 비교 주차: 항상 최신 공식 회차(latestRound) 기준 이번주/1주전/2주전 고정
+      const numbersThisWeek = getLottoNumbersByRound(latestRound)?.numbers || [];
+      const numbers1WeekAgo = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : [];
+      const numbers2WeeksAgo = latestRound > 2 ? getLottoNumbersByRound(latestRound - 2)?.numbers || [] : [];
 
       const primeNumbers = nums.filter((n) => PRIME_SET_WITH_ONE.has(n));
       const compositeNumbers = nums.filter((n) => !PRIME_SET_WITH_ONE.has(n));
@@ -812,6 +824,7 @@ export default function App() {
         }
       }
 
+      // 최신 회차 기준 핫수(가장 최근에 출현/미출 텀 최소) & 콜드수(가장 오랫동안 미출/미출 텀 최대)
       const minAbsenceVal = Math.min(...nums.map((n) => absenceWeeks[n]));
       const hotNumbersInSet = nums.filter((n) => absenceWeeks[n] === minAbsenceVal);
 
@@ -825,7 +838,7 @@ export default function App() {
         subText,
         sourceType,
         sourceIndex,
-        baseRound: targetBaseRound,
+        baseRound: latestRound, // 항상 최신 회차 기준
         numbersThisWeek,
         numbers1WeekAgo,
         numbers2WeeksAgo,
@@ -896,7 +909,7 @@ export default function App() {
       roundData.numbers,
       targetRound,
       `제 ${targetRound}회 당첨번호 정밀 분석`,
-      `${roundData.drwNoDate} 공식 결과 심층 데이터`,
+      `제${latestRound}회 최신 공식 기준 심층 데이터 분석`,
       roundData.bnusNo,
       'WINNING',
       targetRound
@@ -913,7 +926,7 @@ export default function App() {
       target.game,
       latestRound,
       `저장 번호 정밀 분석 (${target.gameLabel})`,
-      `저장일시: ${target.date} | 동행복권 제${latestRound}회차 기준 통계`,
+      `저장일시: ${target.date} | 최신 제${latestRound}회 공식 기준 심층 분석`,
       null,
       'SAVED',
       targetIndex
@@ -1790,7 +1803,7 @@ export default function App() {
                                   g,
                                   latestRound,
                                   `저장 번호 정밀 분석 (${gameLabel})`,
-                                  `저장일시: ${item.date} | 동행복권 제${latestRound}회차 기준 통계`,
+                                  `저장일시: ${item.date} | 최신 제${latestRound}회 공식 기준 심층 분석`,
                                   null,
                                   'SAVED',
                                   foundIdx !== -1 ? foundIdx : 0
@@ -1862,7 +1875,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 4] 제외수 & 12대 필터 ON/OFF 직접 편집 팝업 모달 */}
+      {/* [모달 4] 스마트 제외수 전용 설정 모달 */}
       <Modal
         visible={isExcludeModalVisible}
         animationType="fade"
@@ -1901,7 +1914,6 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* [탭 1] 번호 수동 제외 및 과열수/미출현수 필터링 버튼 패널 */}
             {excludePopupTab === 'NUMBERS' ? (
               <>
                 <View style={styles.excludeCountBar}>
@@ -1965,7 +1977,7 @@ export default function App() {
                       </TouchableOpacity>
                     </View>
 
-                    {/* [신규 추가] 20주 미출현 & 30주 미출현 번호 제외 버튼 행 */}
+                    {/* 20주 미출현 & 30주 미출현 번호 제외 버튼 행 */}
                     <Text style={[styles.overheatedSectionTitle, { marginTop: 10, color: '#1e3a8a' }]}>
                       ❄️ 장기 미출현 번호 (터치 시 제외 등록):
                     </Text>
@@ -2321,156 +2333,154 @@ export default function App() {
         transparent={true}
         onRequestClose={() => setIsWinningModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.bottomModalContainer, { maxHeight: '95%' }]}>
-            <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>🎉 당첨번호 조회 (공식 15줄)</Text>
-                <Text style={styles.modalSubtitle}>실시간 자동 폴백 & 로컬 캐싱 지원</Text>
-              </View>
-
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <TouchableOpacity
-                  style={styles.naverTopIntegratedBtn}
-                  onPress={() => openInNaverSearch(winningTopRound)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.naverTopIntegratedBtnText}>📍 1등 판매점</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.headerRefreshBtn}
-                  onPress={handleRefreshLatestRound}
-                  disabled={isRefreshing}
-                >
-                  {isRefreshing ? (
-                    <ActivityIndicator size="small" color="#2563eb" />
-                  ) : (
-                    <Text style={styles.headerRefreshText}>🔄 갱신</Text>
-                  )}
-                </TouchableOpacity>
-
-                <TouchableOpacity onPress={() => setIsWinningModalVisible(false)} style={styles.closeBtn}>
-                  <Text style={styles.closeBtnText}>✕</Text>
-                </TouchableOpacity>
-              </View>
+        <View style={styles.bottomModalContainer}>
+          <View style={styles.modalHeader}>
+            <View>
+              <Text style={styles.modalTitle}>🎉 당첨번호 조회 (공식 15줄)</Text>
+              <Text style={styles.modalSubtitle}>실시간 자동 폴백 & 로컬 캐싱 지원</Text>
             </View>
 
-            <View style={styles.searchRow}>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="기준 회차 입력 (예: 1160, 1000)"
-                keyboardType="number-pad"
-                value={searchRoundInput}
-                onChangeText={setSearchRoundInput}
-                onSubmitEditing={handleSearchWinningRound}
-              />
-              <TouchableOpacity style={styles.searchBtn} onPress={handleSearchWinningRound}>
-                <Text style={styles.btnTextWhite}>이동</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.roundBar}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <TouchableOpacity
-                onPress={() => setWinningTopRound((prev) => Math.max(15, prev - 15))}
-                disabled={bottomRound <= 1}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.naverTopIntegratedBtn}
+                onPress={() => openInNaverSearch(winningTopRound)}
+                activeOpacity={0.8}
               >
-                <Text style={[styles.roundBtnText, bottomRound <= 1 && styles.disabledText]}>
-                  ◀ 이전 15회
-                </Text>
+                <Text style={styles.naverTopIntegratedBtnText}>📍 1등 판매점</Text>
               </TouchableOpacity>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                <Text style={styles.currentRoundText}>
-                  제 {winningTopRound}회 ~ {bottomRound}회
-                </Text>
-                {isLoadingWinningRounds && <ActivityIndicator size="small" color="#2563eb" />}
-              </View>
+
               <TouchableOpacity
-                onPress={() => setWinningTopRound((prev) => Math.min(latestRound, prev + 15))}
-                disabled={winningTopRound >= latestRound}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.headerRefreshBtn}
+                onPress={handleRefreshLatestRound}
+                disabled={isRefreshing}
               >
-                <Text style={[styles.roundBtnText, winningTopRound >= latestRound && styles.disabledText]}>
-                  다음 15회 ▶
-                </Text>
+                {isRefreshing ? (
+                  <ActivityIndicator size="small" color="#2563eb" />
+                ) : (
+                  <Text style={styles.headerRefreshText}>🔄 갱신</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={() => setIsWinningModalVisible(false)} style={styles.closeBtn}>
+                <Text style={styles.closeBtnText}>✕</Text>
               </TouchableOpacity>
             </View>
+          </View>
 
-            <ScrollView style={styles.winning15Scroll} showsVerticalScrollIndicator={true}>
-              {displayed15Rounds.map((r) => {
-                const roundData = getLottoNumbersByRound(r);
-
-                return (
-                  <View key={`round-card-${r}`} style={styles.roundItemCard}>
-                    <View style={styles.roundItemTopRow}>
-                      <View style={styles.roundItemInfo}>
-                        <Text style={styles.roundNumberBadge}>제 {r} 회</Text>
-                        <Text style={styles.roundItemDateText}>{roundData.drwNoDate}</Text>
-                        {roundData.isPending && (
-                          <Text style={{ fontSize: 10, color: '#f59e0b', fontWeight: 'bold' }}>
-                            (동기화 중...)
-                          </Text>
-                        )}
-                      </View>
-                      <View style={styles.roundItemActionsRow}>
-                        <TouchableOpacity
-                          style={styles.analysisSmallBtn}
-                          onPress={() => {
-                            if (roundData.isPending) {
-                              Alert.alert('알림', '공식 당첨번호를 불러오는 중입니다. 잠시 후 다시 터치해 주세요.');
-                              return;
-                            }
-                            const analysisResult = calculateNumbersAnalysis(
-                              roundData.numbers,
-                              r,
-                              `제 ${r}회 당첨번호 정밀 분석`,
-                              `${roundData.drwNoDate} 공식 결과 심층 데이터`,
-                              roundData.bnusNo,
-                              'WINNING',
-                              r
-                            );
-                            setAnalysisTargetData(analysisResult);
-                            setIsAnalysisModalVisible(true);
-                          }}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <Text style={styles.analysisSmallBtnText}>📊 정밀분석</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-
-                    <View style={styles.miniBallsRow}>
-                      {roundData.numbers.map((n, idx) => (
-                        <View
-                          key={`wb-${r}-${idx}`}
-                          style={[
-                            styles.listMiniBall,
-                            { backgroundColor: roundData.isPending ? '#cbd5e1' : getBallColor(n) },
-                          ]}
-                        >
-                          <Text style={styles.listMiniBallText}>{roundData.isPending ? '?' : n}</Text>
-                        </View>
-                      ))}
-                      <Text style={styles.miniPlusSign}>+</Text>
-                      <View
-                        style={[
-                          styles.listMiniBall,
-                          { backgroundColor: roundData.isPending ? '#cbd5e1' : getBallColor(roundData.bnusNo) },
-                        ]}
-                      >
-                        <Text style={styles.listMiniBallText}>{roundData.isPending ? '?' : roundData.bnusNo}</Text>
-                      </View>
-                    </View>
-                  </View>
-                );
-              })}
-            </ScrollView>
-
-            <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsWinningModalVisible(false)}>
-              <Text style={styles.btnTextWhite}>닫기</Text>
+          <View style={styles.searchRow}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="기준 회차 입력 (예: 1160, 1000)"
+              keyboardType="number-pad"
+              value={searchRoundInput}
+              onChangeText={setSearchRoundInput}
+              onSubmitEditing={handleSearchWinningRound}
+            />
+            <TouchableOpacity style={styles.searchBtn} onPress={handleSearchWinningRound}>
+              <Text style={styles.btnTextWhite}>이동</Text>
             </TouchableOpacity>
           </View>
+
+          <View style={styles.roundBar}>
+            <TouchableOpacity
+              onPress={() => setWinningTopRound((prev) => Math.max(15, prev - 15))}
+              disabled={bottomRound <= 1}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Text style={[styles.roundBtnText, bottomRound <= 1 && styles.disabledText]}>
+                ◀ 이전 15회
+              </Text>
+            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Text style={styles.currentRoundText}>
+                제 {winningTopRound}회 ~ {bottomRound}회
+              </Text>
+              {isLoadingWinningRounds && <ActivityIndicator size="small" color="#2563eb" />}
+            </View>
+            <TouchableOpacity
+              onPress={() => setWinningTopRound((prev) => Math.min(latestRound, prev + 15))}
+              disabled={winningTopRound >= latestRound}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Text style={[styles.roundBtnText, winningTopRound >= latestRound && styles.disabledText]}>
+                다음 15회 ▶
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.winning15Scroll} showsVerticalScrollIndicator={true}>
+            {displayed15Rounds.map((r) => {
+              const roundData = getLottoNumbersByRound(r);
+
+              return (
+                <View key={`round-card-${r}`} style={styles.roundItemCard}>
+                  <View style={styles.roundItemTopRow}>
+                    <View style={styles.roundItemInfo}>
+                      <Text style={styles.roundNumberBadge}>제 {r} 회</Text>
+                      <Text style={styles.roundItemDateText}>{roundData.drwNoDate}</Text>
+                      {roundData.isPending && (
+                        <Text style={{ fontSize: 10, color: '#f59e0b', fontWeight: 'bold' }}>
+                          (동기화 중...)
+                        </Text>
+                      )}
+                    </View>
+                    <View style={styles.roundItemActionsRow}>
+                      <TouchableOpacity
+                        style={styles.analysisSmallBtn}
+                        onPress={() => {
+                          if (roundData.isPending) {
+                            Alert.alert('알림', '공식 당첨번호를 불러오는 중입니다. 잠시 후 다시 터치해 주세요.');
+                            return;
+                          }
+                          const analysisResult = calculateNumbersAnalysis(
+                            roundData.numbers,
+                            r,
+                            `제 ${r}회 당첨번호 정밀 분석`,
+                            `최신 제${latestRound}회 공식 기준 심층 데이터 분석`,
+                            roundData.bnusNo,
+                            'WINNING',
+                            r
+                          );
+                          setAnalysisTargetData(analysisResult);
+                          setIsAnalysisModalVisible(true);
+                        }}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Text style={styles.analysisSmallBtnText}>📊 정밀분석</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  <View style={styles.miniBallsRow}>
+                    {roundData.numbers.map((n, idx) => (
+                      <View
+                        key={`wb-${r}-${idx}`}
+                        style={[
+                          styles.listMiniBall,
+                          { backgroundColor: roundData.isPending ? '#cbd5e1' : getBallColor(n) },
+                        ]}
+                      >
+                        <Text style={styles.listMiniBallText}>{roundData.isPending ? '?' : n}</Text>
+                      </View>
+                    ))}
+                    <Text style={styles.miniPlusSign}>+</Text>
+                    <View
+                      style={[
+                        styles.listMiniBall,
+                        { backgroundColor: roundData.isPending ? '#cbd5e1' : getBallColor(roundData.bnusNo) },
+                      ]}
+                    >
+                      <Text style={styles.listMiniBallText}>{roundData.isPending ? '?' : roundData.bnusNo}</Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+
+          <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsWinningModalVisible(false)}>
+            <Text style={styles.btnTextWhite}>닫기</Text>
+          </TouchableOpacity>
         </View>
       </Modal>
 
@@ -2686,7 +2696,7 @@ export default function App() {
                             {analysisTargetData.hotNumbersInSet.join(', ')}번
                           </Text>
                           <Text style={styles.hotBadgeSub}>
-                            {analysisTargetData.minAbsenceVal === 0 ? '직전 회차 출현수' : `${analysisTargetData.minAbsenceVal}주 만에 출현`}
+                            {analysisTargetData.minAbsenceVal === 0 ? '최신 공식회차 출현수' : `최신 기준 ${analysisTargetData.minAbsenceVal}주 미출`}
                           </Text>
                         </View>
 
@@ -2696,7 +2706,7 @@ export default function App() {
                             {analysisTargetData.coldNumbersInSet.join(', ')}번
                           </Text>
                           <Text style={styles.coldBadgeSub}>
-                            {analysisTargetData.maxAbsenceVal === 0 ? '직전 회차 출현' : `${analysisTargetData.maxAbsenceVal}주 미출현 후 출현`}
+                            {analysisTargetData.maxAbsenceVal === 0 ? '최신 공식회차 출현' : `최신 기준 ${analysisTargetData.maxAbsenceVal}주 미출`}
                           </Text>
                         </View>
                       </View>
@@ -2844,7 +2854,7 @@ export default function App() {
                     </Text>
                   </View>
                   <View style={styles.metricItem}>
-                    <Text style={styles.metricLabel}>이월수(전회차)</Text>
+                    <Text style={styles.metricLabel}>최신 당첨 이월수</Text>
                     <Text style={[styles.metricValue, { color: '#dc2626' }]}>
                       {analysisTargetData.carryOverNumbers.length > 0
                         ? `${analysisTargetData.carryOverNumbers.join(', ')} (${analysisTargetData.carryOverNumbers.length}개)`
@@ -2897,12 +2907,12 @@ export default function App() {
 
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
-                    📈 번호별 최근 30회 빈도 및 직전 미출현 주기
+                    📈 번호별 최근 30회 빈도 및 직전 미출현 주기 (최신 제{latestRound}회 기준)
                   </Text>
                   <View style={styles.tableHeader}>
                     <Text style={[styles.thText, { width: '22%' }]}>번호</Text>
                     <Text style={[styles.thText, { width: '38%' }]}>최근 30회 출현</Text>
-                    <Text style={[styles.thText, { width: '40%' }]}>직전 미출현 텀</Text>
+                    <Text style={[styles.thText, { width: '40%' }]}>최신 기준 미출 텀</Text>
                   </View>
                   {analysisTargetData.numbers.map((n) => (
                     <View key={`freq-row-${n}`} style={styles.tableRow}>
@@ -2916,8 +2926,8 @@ export default function App() {
                       </Text>
                       <Text style={[styles.tdText, { width: '40%', color: '#475569' }]}>
                         {analysisTargetData.absenceWeeks[n] === 0
-                          ? '직전회차 출현'
-                          : `${analysisTargetData.absenceWeeks[n]}주 만에 출현`}
+                          ? '최신 당첨번호 출현'
+                          : `최신 기준 ${analysisTargetData.absenceWeeks[n]}주 미출`}
                       </Text>
                     </View>
                   ))}
@@ -3560,7 +3570,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 
-  // 과열수 패널
   overheatedSectionBox: {
     backgroundColor: '#fff1f2',
     marginHorizontal: 10,
@@ -3603,7 +3612,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // 콜드수 패널
   coldButtonsGrid: {
     flexDirection: 'row',
     gap: 6,
