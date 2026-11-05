@@ -78,15 +78,15 @@ const getBallColor = (number) => {
   return '#22c55e';
 };
 
-// 고정수 및 제외수를 모두 반영한 번호 생성기
-const generateBasicLottoSet = (excludedNumbers = [], fixedNumbers = []) => {
-  const selected = new Set(fixedNumbers);
+// 제외수를 반영한 번호 생성기
+const generateBasicLottoSet = (excludedNumbers = []) => {
   const pool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
-    (n) => !excludedNumbers.includes(n) && !selected.has(n)
+    (n) => !excludedNumbers.includes(n)
   );
 
-  if (selected.size + pool.length < 6) return [];
+  if (pool.length < 6) return [];
 
+  const selected = new Set();
   while (selected.size < 6 && pool.length > 0) {
     const idx = Math.floor(Math.random() * pool.length);
     selected.add(pool[idx]);
@@ -224,17 +224,10 @@ export default function App() {
   const [generationTitle, setGenerationTitle] = useState('🎉 번호 추첨 완료');
   const [activeGenOption, setActiveGenOption] = useState('OPT_STRICT');
 
-  // 제외수 및 고정수 상태
+  // 제외수 상태 (고정수 삭제 완료)
   const [excludedNumbers, setExcludedNumbers] = useState([]);
-  const [fixedNumbers, setFixedNumbers] = useState([]);
-  const [filterModalTab, setFilterModalTab] = useState('EXCLUDE');
-
   const [includeBonusInExclude, setIncludeBonusInExclude] = useState(false);
   const [excludeAnalysisRounds, setExcludeAnalysisRounds] = useState(10);
-
-  // 고정수 프리셋 필터 상태
-  const [selectedFixedPresetKey, setSelectedFixedPresetKey] = useState(null);
-  const [presetFixedMatchedNumbers, setPresetFixedMatchedNumbers] = useState([]);
 
   // 용지 마킹 패턴표 옵션 토글 상태: [🔴 이번주], [🔵 1주 전], [🟢 2주 전]
   const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
@@ -444,14 +437,15 @@ export default function App() {
     [latestRound, getLottoNumbersByRound]
   );
 
+  // 통계 정밀 필터 (연속 2회 이상 이월수 제외 + 가로멸 2~4개 / 세로멸 2~4개 패턴)
   const generateStrictFilteredSet = useCallback(
-    (excluded = [], fixed = []) => {
+    (excluded = []) => {
       const { doubleCarryOver } = getRecent3WeeksCarryOverData();
 
       let attempts = 0;
       while (attempts < 6000) {
         attempts++;
-        const candidate = generateBasicLottoSet(excluded, fixed);
+        const candidate = generateBasicLottoSet(excluded);
         if (candidate.length < 6) return [];
 
         if (isStrictStatisticallyValid(candidate, doubleCarryOver)) {
@@ -464,53 +458,146 @@ export default function App() {
       attempts = 0;
       while (attempts < 3000) {
         attempts++;
-        const candidate = generateBasicLottoSet(excluded, fixed);
+        const candidate = generateBasicLottoSet(excluded);
         if (candidate.length < 6) return [];
         if (isStrictStatisticallyValid(candidate, doubleCarryOver)) {
           return candidate;
         }
       }
-      return generateBasicLottoSet(excluded, fixed);
+      return generateBasicLottoSet(excluded);
     },
     [getRecent3WeeksCarryOverData, hasRank4AtLeastOnce]
   );
 
-  const getExactFrequencyNumbers = useCallback(
-    (roundCount, targetCount) => {
-      const counts = {};
-      for (let i = 1; i <= 45; i++) counts[i] = 0;
+  // ================= [4단계 제외수 공식 유틸리티] =================
+  const getExcludeAnalysisData = useCallback(() => {
+    // 1단계: 2연속 이월수
+    const { round1Numbers, round2Numbers, doubleCarryOver } = getRecent3WeeksCarryOverData();
 
-      for (let r = latestRound; r > Math.max(0, latestRound - roundCount); r--) {
-        const roundData = getLottoNumbersByRound(r);
-        if (roundData && roundData.numbers && !roundData.isPending) {
-          roundData.numbers.forEach((num) => {
-            counts[num] = (counts[num] || 0) + 1;
-          });
-          if (includeBonusInExclude && roundData.bnusNo) {
-            counts[roundData.bnusNo] = (counts[roundData.bnusNo] || 0) + 1;
-          }
-        }
+    // 2단계: 최근 10회 최다 출현 과열수 (4회 이상 출현)
+    const counts10 = {};
+    for (let i = 1; i <= 45; i++) counts10[i] = 0;
+    for (let r = latestRound; r > Math.max(0, latestRound - 10); r--) {
+      const rData = getLottoNumbersByRound(r);
+      if (rData && rData.numbers && !rData.isPending) {
+        rData.numbers.forEach((n) => {
+          counts10[n] = (counts10[n] || 0) + 1;
+        });
       }
-
-      return Object.entries(counts)
-        .filter(([_, count]) => count === targetCount)
-        .map(([num]) => Number(num))
-        .sort((a, b) => a - b);
-    },
-    [latestRound, includeBonusInExclude, getLottoNumbersByRound]
-  );
-
-  const handleSelectFixedPreset = (presetKey, roundCount, targetCount, label) => {
-    const list = getExactFrequencyNumbers(roundCount, targetCount);
-    setSelectedFixedPresetKey(presetKey);
-    setPresetFixedMatchedNumbers(list);
-
-    if (list.length === 0) {
-      Alert.alert('조회 결과', `${label} 조건에 해당하는 번호가 없습니다.`);
     }
+    const hotNumbers = Object.entries(counts10)
+      .filter(([_, cnt]) => cnt >= 4)
+      .map(([n]) => Number(n));
+
+    // 3단계: 직전 회차 2개 이상 겹친 끝수 그룹의 번호들
+    const lastDigitsCount = {};
+    round1Numbers.forEach((n) => {
+      const d = n % 10;
+      lastDigitsCount[d] = (lastDigitsCount[d] || 0) + 1;
+    });
+    const crowdedDigits = Object.entries(lastDigitsCount)
+      .filter(([_, cnt]) => cnt >= 2)
+      .map(([d]) => Number(d));
+    const crowdedDigitNumbers = allNumbers.filter((n) => crowdedDigits.includes(n % 10));
+
+    // 4단계: 직전 회차 2~3개 이상 몰렸던 가로행 및 세로열 번호들
+    const rowCounts = [0, 0, 0, 0, 0, 0, 0];
+    const colCounts = [0, 0, 0, 0, 0, 0, 0];
+    round1Numbers.forEach((n) => {
+      const rIdx = Math.floor((n - 1) / 7);
+      const cIdx = (n - 1) % 7;
+      if (rIdx < 7) rowCounts[rIdx]++;
+      if (cIdx < 7) colCounts[cIdx]++;
+    });
+
+    const crowdedRowIdxs = rowCounts.map((cnt, idx) => (cnt >= 2 ? idx : -1)).filter((idx) => idx !== -1);
+    const crowdedColIdxs = colCounts.map((cnt, idx) => (cnt >= 2 ? idx : -1)).filter((idx) => idx !== -1);
+
+    const crowdedLineNumbers = allNumbers.filter((n) => {
+      const rIdx = Math.floor((n - 1) / 7);
+      const cIdx = (n - 1) % 7;
+      return crowdedRowIdxs.includes(rIdx) || crowdedColIdxs.includes(cIdx);
+    });
+
+    return {
+      step1DoubleCarry: doubleCarryOver,
+      step2HotNumbers: hotNumbers,
+      step3CrowdedDigitNumbers: crowdedDigitNumbers,
+      step4CrowdedLineNumbers: crowdedLineNumbers,
+    };
+  }, [latestRound, getRecent3WeeksCarryOverData, getLottoNumbersByRound, allNumbers]);
+
+  // 스마트 12개 정밀 제외수 일괄 생성 및 적용
+  const applySmart12ExcludeSet = () => {
+    const {
+      step1DoubleCarry,
+      step2HotNumbers,
+      step3CrowdedDigitNumbers,
+      step4CrowdedLineNumbers,
+    } = getExcludeAnalysisData();
+
+    const excludeSet = new Set();
+
+    // 1. 2연속 이월수 우선 추가
+    step1DoubleCarry.forEach((n) => excludeSet.add(n));
+
+    // 2. 최근 10회 과열수 추가
+    step2HotNumbers.forEach((n) => {
+      if (excludeSet.size < 4) excludeSet.add(n);
+    });
+
+    // 3. 직전 끝수 과밀 번호 추가
+    step3CrowdedDigitNumbers.forEach((n) => {
+      if (excludeSet.size < 7) excludeSet.add(n);
+    });
+
+    // 4. 용지 과밀 라인의 번호들 추가하여 12개 안팎으로 채움
+    step4CrowdedLineNumbers.forEach((n) => {
+      if (excludeSet.size < 12) excludeSet.add(n);
+    });
+
+    // 부족할 경우 미출현수에서 보충
+    if (excludeSet.size < 12) {
+      const freq = getExcludeFrequencyData();
+      freq.leastList.forEach((item) => {
+        if (excludeSet.size < 12) excludeSet.add(item.num);
+      });
+    }
+
+    const finalResult = Array.from(excludeSet).sort((a, b) => a - b);
+    setExcludedNumbers(finalResult);
+    Alert.alert('스마트 12개 제외수 적용 완료', `통계 4대 공식을 기반으로 총 ${finalResult.length}개의 추천 제외수가 설정되었습니다.\n\n제외 번호: ${finalResult.join(', ')}`);
   };
 
-  // 공용 정밀 분석 데이터 생성기 (보너스 번호 표시 제외)
+  const getExcludeFrequencyData = useCallback(() => {
+    const counts = {};
+    for (let i = 1; i <= 45; i++) counts[i] = 0;
+
+    for (let r = latestRound; r > Math.max(0, latestRound - excludeAnalysisRounds); r--) {
+      const roundData = getLottoNumbersByRound(r);
+      if (roundData && roundData.numbers && !roundData.isPending) {
+        roundData.numbers.forEach((num) => {
+          counts[num] = (counts[num] || 0) + 1;
+        });
+        if (includeBonusInExclude && roundData.bnusNo) {
+          counts[roundData.bnusNo] = (counts[roundData.bnusNo] || 0) + 1;
+        }
+      }
+    }
+
+    const sortedList = Object.entries(counts)
+      .map(([num, count]) => ({ num: Number(num), count }))
+      .sort((a, b) => b.count - a.count);
+
+    const mostList = sortedList.slice(0, 5);
+    const leastList = sortedList.slice(-5).reverse();
+    const nonAppearedList = sortedList.filter((item) => item.count === 0).map((item) => item.num);
+
+    return { counts, mostList, leastList, nonAppearedList };
+  }, [latestRound, excludeAnalysisRounds, includeBonusInExclude, getLottoNumbersByRound]);
+
+  const { mostList, leastList } = getExcludeFrequencyData();
+
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -597,12 +684,8 @@ export default function App() {
 
       const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 3);
 
-      // 용지 마킹 패턴 계산 (보너스 번호 제외, 순수 6개 번호 기준)
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
-      // [이번주 / 1주 전 / 2주 전] 번호 데이터 추출
-      // 당첨번호 분석: 분석 회차가 '이번주', 그 전 회차가 '1주 전', 2회차 전이 '2주 전'
-      // 저장번호 분석: 최신 공식 회차가 '이번주', 그 전 회차가 '1주 전', 2회차 전이 '2주 전'
       const targetBaseRound = sourceType === 'WINNING' ? baseRound : latestRound;
       const numbersThisWeek = getLottoNumbersByRound(targetBaseRound)?.numbers || [];
       const numbers1WeekAgo = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
@@ -700,244 +783,6 @@ export default function App() {
     setAnalysisTargetData(result);
   };
 
-  const getExcludeFrequencyData = useCallback(() => {
-    const counts = {};
-    for (let i = 1; i <= 45; i++) counts[i] = 0;
-
-    for (let r = latestRound; r > Math.max(0, latestRound - excludeAnalysisRounds); r--) {
-      const roundData = getLottoNumbersByRound(r);
-      if (roundData && roundData.numbers && !roundData.isPending) {
-        roundData.numbers.forEach((num) => {
-          counts[num] = (counts[num] || 0) + 1;
-        });
-        if (includeBonusInExclude && roundData.bnusNo) {
-          counts[roundData.bnusNo] = (counts[roundData.bnusNo] || 0) + 1;
-        }
-      }
-    }
-
-    const sortedList = Object.entries(counts)
-      .map(([num, count]) => ({ num: Number(num), count }))
-      .sort((a, b) => b.count - a.count);
-
-    const mostList = sortedList.slice(0, 5);
-    const leastList = sortedList.slice(-5).reverse();
-    const nonAppearedList = sortedList.filter((item) => item.count === 0).map((item) => item.num);
-
-    return { counts, mostList, leastList, nonAppearedList };
-  }, [latestRound, excludeAnalysisRounds, includeBonusInExclude, getLottoNumbersByRound]);
-
-  const { mostList, leastList } = getExcludeFrequencyData();
-
-  const applyAutoExcludeOption = (gamesCount) => {
-    setExcludeAnalysisRounds(gamesCount);
-    const counts = {};
-    const appearedSet = new Set();
-
-    for (let r = latestRound; r > Math.max(0, latestRound - gamesCount); r--) {
-      const roundData = getLottoNumbersByRound(r);
-      if (roundData && roundData.numbers && !roundData.isPending) {
-        roundData.numbers.forEach((num) => {
-          counts[num] = (counts[num] || 0) + 1;
-          appearedSet.add(num);
-        });
-        if (includeBonusInExclude && roundData.bnusNo) {
-          counts[roundData.bnusNo] = (counts[roundData.bnusNo] || 0) + 1;
-          appearedSet.add(roundData.bnusNo);
-        }
-      }
-    }
-
-    const nonAppeared = [];
-    for (let i = 1; i <= 45; i++) {
-      if (!appearedSet.has(i)) nonAppeared.push(i);
-    }
-
-    const appearedList = Array.from(appearedSet).sort((a, b) => counts[b] - counts[a]);
-    if (appearedList.length === 0) return;
-
-    const mostNum = appearedList[0];
-    const leastNum = appearedList[appearedList.length - 1];
-
-    const combinedSet = new Set([...nonAppeared, mostNum, leastNum]);
-    fixedNumbers.forEach((fn) => combinedSet.delete(fn));
-
-    const resultArr = Array.from(combinedSet).sort((a, b) => a - b);
-
-    if (resultArr.length > 39) {
-      Alert.alert('알림', `제외수가 ${resultArr.length}개로 한도(39개)를 초과합니다.`);
-      return;
-    }
-    setExcludedNumbers(resultArr);
-  };
-
-  const excludeRecentRounds = (count) => {
-    const toExclude = new Set(excludedNumbers);
-    for (let r = latestRound; r > Math.max(0, latestRound - count); r--) {
-      const data = getLottoNumbersByRound(r);
-      if (data && data.numbers && !data.isPending) {
-        data.numbers.forEach((n) => {
-          if (!fixedNumbers.includes(n)) toExclude.add(n);
-        });
-        if (includeBonusInExclude && data.bnusNo && !fixedNumbers.includes(data.bnusNo)) {
-          toExclude.add(data.bnusNo);
-        }
-      }
-    }
-
-    const arr = Array.from(toExclude).sort((a, b) => a - b);
-    if (arr.length > 39) {
-      Alert.alert('알림', `제외수가 ${arr.length}개로 최대 39개를 초과합니다.`);
-      return;
-    }
-    setExcludedNumbers(arr);
-    Alert.alert('적용 완료', `최근 ${count}회차 당첨번호가 제외수에 등록되었습니다.`);
-  };
-
-  const handleGenerateWithOptions = useCallback(
-    (optionType) => {
-      const availableCount = 45 - excludedNumbers.length;
-      if (availableCount < 6) {
-        Alert.alert('알림', '제외수가 너무 많습니다. 최소 6개 이상의 후보 번호가 필요합니다.');
-        return;
-      }
-
-      setActiveGenOption(optionType);
-      let newGames = [];
-      let title = '';
-
-      const fixedDesc = fixedNumbers.length > 0 ? ` (고정수: ${fixedNumbers.join(',')} 포함)` : '';
-
-      if (optionType === 'NORMAL') {
-        newGames = Array.from({ length: 5 }, () => generateBasicLottoSet(excludedNumbers, fixedNumbers));
-        title = `🎲 기본 무작위 5세트 생성${fixedDesc}`;
-      } else if (optionType === 'OPT_STRICT') {
-        newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers, fixedNumbers));
-        title = `📊 통계 정밀 필터 (4등 1회↑·2연속이월제외·멸2~4)${fixedDesc}`;
-      }
-
-      setGames(newGames);
-      setGenerationTitle(title);
-      setIsGeneratedModalVisible(true);
-    },
-    [excludedNumbers, fixedNumbers, generateStrictFilteredSet]
-  );
-
-  const handleGenerateOpposite = () => {
-    if (savedSets.length === 0) {
-      Alert.alert('알림', '저장된 번호가 없습니다. 먼저 번호를 저장해주세요.');
-      return;
-    }
-
-    const savedNumbersSet = new Set();
-    savedSets.forEach((entry) => {
-      entry.games.forEach((g) => {
-        g.forEach((num) => savedNumbersSet.add(num));
-      });
-    });
-
-    const oppositePool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
-      (n) => !savedNumbersSet.has(n) && !excludedNumbers.includes(n) && !fixedNumbers.includes(n)
-    );
-
-    if (oppositePool.length + fixedNumbers.length < 6) {
-      Alert.alert(
-        '반대번호 생성 불가',
-        `저장된 번호를 제외하고 남은 번호가 부족합니다. 최소 6개 이상이어야 합니다.`
-      );
-      return;
-    }
-
-    const newGames = Array.from({ length: 5 }, () => {
-      const selected = new Set(fixedNumbers);
-      const tempPool = [...oppositePool];
-      while (selected.size < 6 && tempPool.length > 0) {
-        const rIdx = Math.floor(Math.random() * tempPool.length);
-        selected.add(tempPool[rIdx]);
-        tempPool.splice(rIdx, 1);
-      }
-      return Array.from(selected).sort((a, b) => a - b);
-    });
-
-    setGames(newGames);
-    setGenerationTitle(`⚡ 반대번호 생성 (후보 ${oppositePool.length}개)`);
-    setIsSavedModalVisible(false);
-    setIsGeneratedModalVisible(true);
-  };
-
-  const handleSaveCurrentGames = async () => {
-    if (games.length === 0) return;
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(
-      now.getDate()
-    ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const newEntry = { id: Date.now().toString(), date: dateStr, games: games };
-    try {
-      const updated = [newEntry, ...savedSets];
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      setSavedSets(updated);
-      Alert.alert('저장 완료', '생성된 5세트 번호가 기기에 저장되었습니다.');
-    } catch (e) {
-      Alert.alert('저장 실패', '번호를 저장하는 중 문제가 발생했습니다.');
-    }
-  };
-
-  const handleDeleteSingleGame = (itemId, gameIdx) => {
-    Alert.alert('1게임 삭제', '선택하신 게임 번호를 삭제하시겠습니까?', [
-      { text: '취소', style: 'cancel' },
-      {
-        text: '삭제',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            const updated = savedSets
-              .map((item) => {
-                if (item.id === itemId) {
-                  const remainingGames = item.games.filter((_, idx) => idx !== gameIdx);
-                  return { ...item, games: remainingGames };
-                }
-                return item;
-              })
-              .filter((item) => item.games.length > 0);
-
-            setSavedSets(updated);
-            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-          } catch (e) {
-            Alert.alert('삭제 오류', '게임을 삭제하는 중 문제가 발생했습니다.');
-          }
-        },
-      },
-    ]);
-  };
-
-  const handleDeleteAllSavedSets = () => {
-    if (savedSets.length === 0) {
-      Alert.alert('알림', '삭제할 저장 번호가 없습니다.');
-      return;
-    }
-
-    Alert.alert(
-      '⚠️ 전체 삭제 확인',
-      '보관함에 저장된 모든 로또 번호를 완전히 삭제하시겠습니까?\n삭제된 번호는 복구할 수 없습니다.',
-      [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '모두 삭제',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setSavedSets([]);
-              await AsyncStorage.removeItem(STORAGE_KEY);
-              Alert.alert('삭제 완료', '모든 저장 번호가 깨끗이 삭제되었습니다.');
-            } catch (e) {
-              Alert.alert('오류', '전체 삭제 중 문제가 발생했습니다.');
-            }
-          },
-        },
-      ]
-    );
-  };
-
   const toggleExcludeNumber = (num) => {
     if (excludedNumbers.includes(num)) {
       setExcludedNumbers(excludedNumbers.filter((n) => n !== num));
@@ -946,27 +791,13 @@ export default function App() {
         Alert.alert('알림', '최소 6개의 번호는 남아있어야 합니다 (최대 39개 제외).');
         return;
       }
-      setFixedNumbers(fixedNumbers.filter((n) => n !== num));
       setExcludedNumbers([...excludedNumbers, num].sort((a, b) => a - b));
-    }
-  };
-
-  const toggleFixedNumber = (num) => {
-    if (fixedNumbers.includes(num)) {
-      setFixedNumbers(fixedNumbers.filter((n) => n !== num));
-    } else {
-      if (fixedNumbers.length >= 5) {
-        Alert.alert('알림', '고정수는 최대 5개까지만 선택할 수 있습니다.');
-        return;
-      }
-      setExcludedNumbers(excludedNumbers.filter((n) => n !== num));
-      setFixedNumbers([...fixedNumbers, num].sort((a, b) => a - b));
     }
   };
 
   const handleInvertExcludeNumbers = () => {
     const all = Array.from({ length: 45 }, (_, i) => i + 1);
-    const inverted = all.filter((n) => !excludedNumbers.includes(n) && !fixedNumbers.includes(n));
+    const inverted = all.filter((n) => !excludedNumbers.includes(n));
 
     if (inverted.length > 39) {
       Alert.alert('반전 불가', '최소 6개의 번호는 남아있어야 합니다.');
@@ -1415,7 +1246,7 @@ export default function App() {
               }}
               activeOpacity={0.6}
             />
-            {/* 2. 제외수 & 고정수 설정 */}
+            {/* 2. 제외수 설정 */}
             <TouchableOpacity
               style={styles.menuGridItem}
               onPress={() => setIsExcludeModalVisible(true)}
@@ -1464,21 +1295,13 @@ export default function App() {
                 <Text style={styles.modalSubtitle}>
                   {activeGenOption === 'OPT_STRICT'
                     ? '합 115~179 · AC≥7 · 4등1회↑ · 2연속이월제외 · 멸구간 2~4개'
-                    : '제외수/고정수 반영 무작위 추출'}
+                    : '제외수 반영 무작위 추출'}
                 </Text>
               </View>
               <TouchableOpacity onPress={() => setIsGeneratedModalVisible(false)} style={styles.closeBtn}>
                 <Text style={styles.closeBtnText}>✕</Text>
               </TouchableOpacity>
             </View>
-
-            {fixedNumbers.length > 0 && (
-              <View style={styles.appliedFixedBanner}>
-                <Text style={styles.appliedFixedBannerText}>
-                  📌 적용된 고정수 ({fixedNumbers.length}개): {fixedNumbers.join(', ')}
-                </Text>
-              </View>
-            )}
 
             <TouchableOpacity
               style={styles.manualTopOptionBtn}
@@ -1499,26 +1322,14 @@ export default function App() {
                     <Text style={styles.badgeText}>{gameLabels[gIdx]}</Text>
                   </View>
                   <View style={styles.ballsRow}>
-                    {game.map((num) => {
-                      const isFixed = fixedNumbers.includes(num);
-                      return (
-                        <View
-                          key={`b-${num}`}
-                          style={[
-                            styles.ball,
-                            { backgroundColor: getBallColor(num) },
-                            isFixed && styles.fixedBallHighlight,
-                          ]}
-                        >
-                          <Text style={styles.ballText}>{num}</Text>
-                          {isFixed && (
-                            <View style={styles.fixedBallBadge}>
-                              <Text style={styles.fixedBallBadgeText}>고정</Text>
-                            </View>
-                          )}
-                        </View>
-                      );
-                    })}
+                    {game.map((num) => (
+                      <View
+                        key={`b-${num}`}
+                        style={[styles.ball, { backgroundColor: getBallColor(num) }]}
+                      >
+                        <Text style={styles.ballText}>{num}</Text>
+                      </View>
+                    ))}
                   </View>
                 </View>
               ))}
@@ -1770,7 +1581,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 4] 제외수 & 고정수 확장 팝업 모달 */}
+      {/* [모달 4] 4단계 공식 기반 스마트 제외수 설정 모달 (고정수 삭제 완료) */}
       <Modal
         visible={isExcludeModalVisible}
         animationType="fade"
@@ -1779,27 +1590,9 @@ export default function App() {
       >
         <View style={styles.centerModalOverlay}>
           <View style={styles.excludePopupBox}>
-            <View style={styles.filterTabContainer}>
-              <TouchableOpacity
-                style={[styles.filterTabItem, filterModalTab === 'EXCLUDE' && styles.filterTabItemActive]}
-                onPress={() => setFilterModalTab('EXCLUDE')}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.filterTabItemText, filterModalTab === 'EXCLUDE' && styles.filterTabItemTextActive]}>
-                  🚫 제외수 ({excludedNumbers.length})
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.filterTabItem, filterModalTab === 'FIXED' && styles.filterTabItemFixedActive]}
-                onPress={() => setFilterModalTab('FIXED')}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.filterTabItemText, filterModalTab === 'FIXED' && styles.filterTabItemFixedTextActive]}>
-                  📌 고정수 ({fixedNumbers.length}/5)
-                </Text>
-              </TouchableOpacity>
-
+            {/* 상단 헤더 */}
+            <View style={styles.excludeHeaderBox}>
+              <Text style={styles.excludeHeaderTitle}>🚫 제외수 설정</Text>
               <TouchableOpacity
                 onPress={() => setIsExcludeModalVisible(false)}
                 style={styles.excludeCloseTouch}
@@ -1809,16 +1602,11 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            <View style={[styles.excludeCountBar, filterModalTab === 'FIXED' && { backgroundColor: '#dcfce7' }]}>
-              {filterModalTab === 'EXCLUDE' ? (
-                <Text style={styles.excludeCountText}>
-                  제외수 : <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (최대 39개)
-                </Text>
-              ) : (
-                <Text style={[styles.excludeCountText, { color: '#166534' }]}>
-                  고정수 : <Text style={{ color: '#15803d', fontWeight: '900' }}>{fixedNumbers.length}개</Text> (최대 5개, 필수 포함)
-                </Text>
-              )}
+            {/* 제외수 카운터 바 */}
+            <View style={styles.excludeCountBar}>
+              <Text style={styles.excludeCountText}>
+                설정된 제외수: <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (권장: 10~15개 / 최대: 39개)
+              </Text>
 
               <TouchableOpacity
                 style={[styles.bonusToggleBtn, includeBonusInExclude && styles.bonusToggleBtnActive]}
@@ -1832,347 +1620,215 @@ export default function App() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 490 }}>
-              {/* 고정수 모드: 직전/2주전/3주전 이월수 구별 표시 패널 */}
-              {filterModalTab === 'FIXED' && (
-                <View style={styles.carryOverSectionBox}>
-                  <View style={styles.carryOverHeaderRow}>
-                    <Text style={styles.carryOverHeaderTitle}>
-                      🔄 최근 3주간 이월수 구별 및 고정수 지정:
-                    </Text>
-                  </View>
-
-                  {/* 1. 직전 회차 (1주 전) 당첨번호 */}
-                  <View style={styles.carryOverWeekRow}>
-                    <View style={styles.carryOverWeekLabelBoxRed}>
-                      <Text style={styles.carryOverWeekLabelText}>직전 1주전</Text>
-                      <Text style={styles.carryOverWeekSubText}>제{latestRound}회</Text>
-                    </View>
-                    <View style={styles.carryOverBallsFlex}>
-                      {recent3WeeksData.round1Numbers.map((num) => {
-                        const isFixed = fixedNumbers.includes(num);
-                        const isDouble = recent3WeeksData.doubleCarryOver.includes(num);
-                        return (
-                          <TouchableOpacity
-                            key={`c1-${num}`}
-                            style={[styles.carryOverBallTouch, isFixed && styles.carryOverBallTouchFixed]}
-                            onPress={() => toggleFixedNumber(num)}
-                            activeOpacity={0.7}
-                          >
-                            <View style={[styles.carryOverBallCircle, { backgroundColor: getBallColor(num) }]}>
-                              <Text style={styles.carryOverBallCircleText}>{num}</Text>
-                            </View>
-                            {isFixed && <Text style={styles.carryOverPinMark}>📌</Text>}
-                            {isDouble && (
-                              <View style={styles.doubleWarnBadge}>
-                                <Text style={styles.doubleWarnBadgeText}>2연속</Text>
-                              </View>
-                            )}
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </View>
-
-                  {/* 2. 2주 전 당첨번호 */}
-                  {latestRound > 1 && (
-                    <View style={styles.carryOverWeekRow}>
-                      <View style={styles.carryOverWeekLabelBoxBlue}>
-                        <Text style={styles.carryOverWeekLabelText}>2주 전</Text>
-                        <Text style={styles.carryOverWeekSubText}>제{latestRound - 1}회</Text>
-                      </View>
-                      <View style={styles.carryOverBallsFlex}>
-                        {recent3WeeksData.round2Numbers.map((num) => {
-                          const isFixed = fixedNumbers.includes(num);
-                          return (
-                            <TouchableOpacity
-                              key={`c2-${num}`}
-                              style={[styles.carryOverBallTouch, isFixed && styles.carryOverBallTouchFixed]}
-                              onPress={() => toggleFixedNumber(num)}
-                              activeOpacity={0.7}
-                            >
-                              <View style={[styles.carryOverBallCircle, { backgroundColor: getBallColor(num) }]}>
-                                <Text style={styles.carryOverBallCircleText}>{num}</Text>
-                              </View>
-                              {isFixed && <Text style={styles.carryOverPinMark}>📌</Text>}
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                    </View>
-                  )}
-
-                  {/* 3. 3주 전 당첨번호 */}
-                  {latestRound > 2 && (
-                    <View style={styles.carryOverWeekRow}>
-                      <View style={styles.carryOverWeekLabelBoxGreen}>
-                        <Text style={styles.carryOverWeekLabelText}>3주 전</Text>
-                        <Text style={styles.carryOverWeekSubText}>제{latestRound - 2}회</Text>
-                      </View>
-                      <View style={styles.carryOverBallsFlex}>
-                        {recent3WeeksData.round3Numbers.map((num) => {
-                          const isFixed = fixedNumbers.includes(num);
-                          return (
-                            <TouchableOpacity
-                              key={`c3-${num}`}
-                              style={[styles.carryOverBallTouch, isFixed && styles.carryOverBallTouchFixed]}
-                              onPress={() => toggleFixedNumber(num)}
-                              activeOpacity={0.7}
-                            >
-                              <View style={[styles.carryOverBallCircle, { backgroundColor: getBallColor(num) }]}>
-                                <Text style={styles.carryOverBallCircleText}>{num}</Text>
-                              </View>
-                              {isFixed && <Text style={styles.carryOverPinMark}>📌</Text>}
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                    </View>
-                  )}
-
-                  {recent3WeeksData.doubleCarryOver.length > 0 && (
-                    <View style={styles.doubleCarryInfoBar}>
-                      <Text style={styles.doubleCarryInfoText}>
-                        ⚠️ [직전+2주전] 연속 2번 출현수 ({recent3WeeksData.doubleCarryOver.join(', ')}): 통계 필터 생성 시 자동 배제됩니다.
-                      </Text>
-                    </View>
-                  )}
+              {/* [4단계 공식 스마트 원터치 제외 컨트롤 패널] */}
+              <View style={styles.smartFormulaPanel}>
+                <View style={styles.smartFormulaHeaderRow}>
+                  <Text style={styles.smartFormulaTitle}>🎯 통계 공식 기반 추천 제외수 원터치 적용</Text>
                 </View>
-              )}
 
-              {/* 고정수 모드: 4대 출현 빈도 기반 프리셋 패널 */}
-              {filterModalTab === 'FIXED' && (
-                <View style={styles.fixedPresetContainer}>
-                  <Text style={styles.fixedPresetTitle}>
-                    ⚡ 출현 빈도 기반 고정수 추천 (터치 시 번호 출력/선택):
+                {/* 1. 최강 추천: 12개 정밀 제외수 자동 적용 버튼 */}
+                <TouchableOpacity
+                  style={styles.smartAuto12Btn}
+                  onPress={applySmart12ExcludeSet}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.smartAuto12BtnTitle}>⚡ 12개 정밀 제외수 일괄 자동 적용</Text>
+                  <Text style={styles.smartAuto12BtnSub}>
+                    (2연속이월 + 10회과열 + 동끝수과밀 + 용지밀집라인 종합)
                   </Text>
+                </TouchableOpacity>
 
-                  <View style={styles.presetButtonGrid}>
-                    <TouchableOpacity
-                      style={[
-                        styles.presetSelectBtn,
-                        selectedFixedPresetKey === '15_3' && styles.presetSelectBtnActive,
-                      ]}
-                      onPress={() => handleSelectFixedPreset('15_3', 15, 3, '최근 15회 3회 출현')}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={[styles.presetSelectBtnTitle, selectedFixedPresetKey === '15_3' && styles.presetSelectBtnTitleActive]}>
-                        최근 15회 중 3회 출현
-                      </Text>
-                      <Text style={styles.presetSelectBtnSub}>황금 밸런스 번호군</Text>
-                    </TouchableOpacity>
+                {/* 개별 4단계 필터 버튼 그리드 */}
+                <View style={styles.formulaStepGrid}>
+                  {/* 1단계: 2연속 이월수 */}
+                  <TouchableOpacity
+                    style={styles.formulaStepBtn}
+                    onPress={() => {
+                      const { step1DoubleCarry } = getExcludeAnalysisData();
+                      if (step1DoubleCarry.length === 0) {
+                        Alert.alert('알림', '최근 직전 회차와 2주 전 연속 출현한 번호가 없습니다.');
+                        return;
+                      }
+                      const merged = Array.from(new Set([...excludedNumbers, ...step1DoubleCarry])).sort((a, b) => a - b);
+                      setExcludedNumbers(merged);
+                      Alert.alert('적용 완료', `2연속 출현 번호 (${step1DoubleCarry.join(', ')})가 제외수에 추가되었습니다.`);
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={styles.formulaStepBtnTitle}>1단계. 2연속 이월 제외</Text>
+                    <Text style={styles.formulaStepBtnSub}>
+                      ({recent3WeeksData.doubleCarryOver.length > 0 ? recent3WeeksData.doubleCarryOver.join(',') : '없음'})
+                    </Text>
+                  </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={[
-                        styles.presetSelectBtn,
-                        selectedFixedPresetKey === '15_2' && styles.presetSelectBtnActive,
-                      ]}
-                      onPress={() => handleSelectFixedPreset('15_2', 15, 2, '최근 15회 2회 출현')}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={[styles.presetSelectBtnTitle, selectedFixedPresetKey === '15_2' && styles.presetSelectBtnTitleActive]}>
-                        최근 15회 중 2회 출현
-                      </Text>
-                      <Text style={styles.presetSelectBtnSub}>재출현 기대 번호군</Text>
-                    </TouchableOpacity>
+                  {/* 2단계: 최근 10회 과열수 */}
+                  <TouchableOpacity
+                    style={styles.formulaStepBtn}
+                    onPress={() => {
+                      const { step2HotNumbers } = getExcludeAnalysisData();
+                      if (step2HotNumbers.length === 0) {
+                        Alert.alert('알림', '최근 10회 중 4회 이상 과열 출현한 번호가 없습니다.');
+                        return;
+                      }
+                      const merged = Array.from(new Set([...excludedNumbers, ...step2HotNumbers])).sort((a, b) => a - b);
+                      setExcludedNumbers(merged);
+                      Alert.alert('적용 완료', `10회 과열 번호 (${step2HotNumbers.join(', ')})가 제외수에 추가되었습니다.`);
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={styles.formulaStepBtnTitle}>2단계. 10회 과열수 제외</Text>
+                    <Text style={styles.formulaStepBtnSub}>(4회 이상 출현수)</Text>
+                  </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={[
-                        styles.presetSelectBtn,
-                        selectedFixedPresetKey === '20_4' && styles.presetSelectBtnActive,
-                      ]}
-                      onPress={() => handleSelectFixedPreset('20_4', 20, 4, '최근 20회 4회 출현')}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={[styles.presetSelectBtnTitle, selectedFixedPresetKey === '20_4' && styles.presetSelectBtnTitleActive]}>
-                        최근 20회 중 4회 출현
-                      </Text>
-                      <Text style={styles.presetSelectBtnSub}>장기 상승 강세 번호</Text>
-                    </TouchableOpacity>
+                  {/* 3단계: 직전 끝수 과밀 */}
+                  <TouchableOpacity
+                    style={styles.formulaStepBtn}
+                    onPress={() => {
+                      const { step3CrowdedDigitNumbers } = getExcludeAnalysisData();
+                      if (step3CrowdedDigitNumbers.length === 0) {
+                        Alert.alert('알림', '직전 회차에 2개 이상 겹친 끝수가 없습니다.');
+                        return;
+                      }
+                      const merged = Array.from(new Set([...excludedNumbers, ...step3CrowdedDigitNumbers])).sort((a, b) => a - b);
+                      setExcludedNumbers(merged);
+                      Alert.alert('적용 완료', `직전 동끝수 과밀 번호 ${step3CrowdedDigitNumbers.length}개가 제외수에 추가되었습니다.`);
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={styles.formulaStepBtnTitle}>3단계. 직전 끝수과밀 제외</Text>
+                    <Text style={styles.formulaStepBtnSub}>(동일 끝수 쏠림)</Text>
+                  </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={[
-                        styles.presetSelectBtn,
-                        selectedFixedPresetKey === '20_3' && styles.presetSelectBtnActive,
-                      ]}
-                      onPress={() => handleSelectFixedPreset('20_3', 20, 3, '최근 20회 3회 출현')}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={[styles.presetSelectBtnTitle, selectedFixedPresetKey === '20_3' && styles.presetSelectBtnTitleActive]}>
-                        최근 20회 중 3회 출현
-                      </Text>
-                      <Text style={styles.presetSelectBtnSub}>안정적 주기 번호군</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {selectedFixedPresetKey && (
-                    <View style={styles.presetResultContainer}>
-                      <View style={styles.presetResultHeaderRow}>
-                        <Text style={styles.presetResultHeaderText}>
-                          해당 번호 (총 {presetFixedMatchedNumbers.length}개) - 터치하여 고정수 등록:
-                        </Text>
-                        <TouchableOpacity
-                          onPress={() => {
-                            const toAdd = presetFixedMatchedNumbers.slice(0, 5);
-                            setExcludedNumbers(excludedNumbers.filter((n) => !toAdd.includes(n)));
-                            setFixedNumbers(toAdd);
-                          }}
-                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                        >
-                          <Text style={styles.quickAdd5Text}>최대 5개 자동담기</Text>
-                        </TouchableOpacity>
-                      </View>
-
-                      {presetFixedMatchedNumbers.length === 0 ? (
-                        <Text style={styles.presetEmptyText}>조건에 해당하는 번호가 없습니다.</Text>
-                      ) : (
-                        <View style={styles.presetBallsRow}>
-                          {presetFixedMatchedNumbers.map((num) => {
-                            const isFixed = fixedNumbers.includes(num);
-                            return (
-                              <TouchableOpacity
-                                key={`preset-b-${num}`}
-                                style={[
-                                  styles.presetBallTouch,
-                                  isFixed && styles.presetBallTouchFixed,
-                                ]}
-                                onPress={() => toggleFixedNumber(num)}
-                                activeOpacity={0.7}
-                              >
-                                <View style={[styles.presetBallCircle, { backgroundColor: getBallColor(num) }]}>
-                                  <Text style={styles.presetBallCircleText}>{num}</Text>
-                                </View>
-                                {isFixed && <Text style={styles.presetPinMark}>📌</Text>}
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-                      )}
-                    </View>
-                  )}
+                  {/* 4단계: 용지 과밀 라인 */}
+                  <TouchableOpacity
+                    style={styles.formulaStepBtn}
+                    onPress={() => {
+                      const { step4CrowdedLineNumbers } = getExcludeAnalysisData();
+                      if (step4CrowdedLineNumbers.length === 0) {
+                        Alert.alert('알림', '직전 회차에 과밀하게 몰린 라인이 없습니다.');
+                        return;
+                      }
+                      const merged = Array.from(new Set([...excludedNumbers, ...step4CrowdedLineNumbers])).sort((a, b) => a - b);
+                      setExcludedNumbers(merged);
+                      Alert.alert('적용 완료', `직전 용지 과밀 라인 번호들이 제외수에 추가되었습니다.`);
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={styles.formulaStepBtnTitle}>4단계. 용지 과밀라인 제외</Text>
+                    <Text style={styles.formulaStepBtnSub}>(가로/세로 멸예상)</Text>
+                  </TouchableOpacity>
                 </View>
-              )}
+              </View>
 
-              {/* 제외수 모드일 때: 빠른 제외 버튼 및 빈도 통계 */}
-              {filterModalTab === 'EXCLUDE' && (
-                <>
-                  <View style={styles.quickExcludeRow}>
-                    <TouchableOpacity
-                      style={styles.quickExcludeBtn}
-                      onPress={() => excludeRecentRounds(1)}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={styles.quickExcludeBtnText}>🚫 직전 1회차 번호 제외</Text>
-                    </TouchableOpacity>
+              {/* 기본 빠른 제외수 및 출현 통계 */}
+              <View style={styles.quickExcludeRow}>
+                <TouchableOpacity
+                  style={styles.quickExcludeBtn}
+                  onPress={() => {
+                    const toEx = new Set(excludedNumbers);
+                    const d1 = getLottoNumbersByRound(latestRound);
+                    if (d1 && d1.numbers && !d1.isPending) {
+                      d1.numbers.forEach((n) => toEx.add(n));
+                      if (includeBonusInExclude && d1.bnusNo) toEx.add(d1.bnusNo);
+                    }
+                    setExcludedNumbers(Array.from(toEx).sort((a, b) => a - b));
+                    Alert.alert('적용 완료', '직전 1회차 번호가 제외수에 등록되었습니다.');
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.quickExcludeBtnText}>🚫 직전 1회차 번호 제외</Text>
+                </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.quickExcludeBtn}
-                      onPress={() => excludeRecentRounds(2)}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={styles.quickExcludeBtnText}>🚫 최근 2회차 번호 제외</Text>
-                    </TouchableOpacity>
-                  </View>
+                <TouchableOpacity
+                  style={styles.quickExcludeBtn}
+                  onPress={() => {
+                    const toEx = new Set(excludedNumbers);
+                    [latestRound, latestRound - 1].forEach((r) => {
+                      const d = getLottoNumbersByRound(r);
+                      if (d && d.numbers && !d.isPending) {
+                        d.numbers.forEach((n) => toEx.add(n));
+                        if (includeBonusInExclude && d.bnusNo) toEx.add(d.bnusNo);
+                      }
+                    });
+                    setExcludedNumbers(Array.from(toEx).sort((a, b) => a - b));
+                    Alert.alert('적용 완료', '최근 2회차 번호가 제외수에 등록되었습니다.');
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.quickExcludeBtnText}>🚫 최근 2회차 번호 제외</Text>
+                </TouchableOpacity>
+              </View>
 
-                  <View style={styles.excludeAnalysisTabRow}>
-                    <Text style={styles.analysisLabel}>분석 구간:</Text>
-                    {[10, 15, 20].map((count) => (
+              <View style={styles.statsPanel}>
+                <View style={styles.statsPanelHeader}>
+                  <Text style={styles.statsPanelTitle}>🔥 최다 출현 번호 (터치 시 제외/해제):</Text>
+                </View>
+                <View style={styles.statsBallsRow}>
+                  {mostList.map((item) => {
+                    const isEx = excludedNumbers.includes(item.num);
+                    return (
                       <TouchableOpacity
-                        key={`round-tab-${count}`}
-                        style={[styles.roundTabBtn, excludeAnalysisRounds === count && styles.roundTabBtnActive]}
-                        onPress={() => setExcludeAnalysisRounds(count)}
+                        key={`most-b-${item.num}`}
+                        style={styles.statBallItem}
+                        onPress={() => toggleExcludeNumber(item.num)}
+                        activeOpacity={0.7}
                       >
-                        <Text style={[styles.roundTabBtnText, excludeAnalysisRounds === count && styles.roundTabBtnTextActive]}>
-                          최근 {count}회
-                        </Text>
+                        <View
+                          style={[
+                            styles.statBallMini,
+                            { backgroundColor: getBallColor(item.num) },
+                            isEx && styles.statBallMiniExcluded,
+                          ]}
+                        >
+                          <Text style={[styles.statBallMiniText, isEx && styles.statBallMiniTextExcluded]}>
+                            {item.num}
+                          </Text>
+                          {isEx && <Text style={styles.strikeMarkMini}>✕</Text>}
+                        </View>
+                        <Text style={styles.statCountBadge}>{item.count}회</Text>
                       </TouchableOpacity>
-                    ))}
-                  </View>
+                    );
+                  })}
+                </View>
+              </View>
 
-                  <View style={styles.autoOptionBtnRow}>
-                    <TouchableOpacity
-                      style={styles.autoOptionBtn}
-                      onPress={() => applyAutoExcludeOption(excludeAnalysisRounds)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.autoOptionBtnText}>
-                        ⚡ 최근 {excludeAnalysisRounds}회 미출현 + 최다/최소 제외 적용
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  <View style={styles.statsPanel}>
-                    <View style={styles.statsPanelHeader}>
-                      <Text style={styles.statsPanelTitle}>🔥 최다 출현 번호 (터치 시 제외/해제):</Text>
-                    </View>
-                    <View style={styles.statsBallsRow}>
-                      {mostList.map((item) => {
-                        const isEx = excludedNumbers.includes(item.num);
-                        return (
-                          <TouchableOpacity
-                            key={`most-b-${item.num}`}
-                            style={styles.statBallItem}
-                            onPress={() => toggleExcludeNumber(item.num)}
-                            activeOpacity={0.7}
-                          >
-                            <View
-                              style={[
-                                styles.statBallMini,
-                                { backgroundColor: getBallColor(item.num) },
-                                isEx && styles.statBallMiniExcluded,
-                              ]}
-                            >
-                              <Text style={[styles.statBallMiniText, isEx && styles.statBallMiniTextExcluded]}>
-                                {item.num}
-                              </Text>
-                              {isEx && <Text style={styles.strikeMarkMini}>✕</Text>}
-                            </View>
-                            <Text style={styles.statCountBadge}>{item.count}회</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </View>
-
-                  <View style={styles.statsPanel}>
-                    <View style={styles.statsPanelHeader}>
-                      <Text style={styles.statsPanelTitle}>❄️ 최소 출현 번호 (터치 시 제외/해제):</Text>
-                    </View>
-                    <View style={styles.statsBallsRow}>
-                      {leastList.map((item) => {
-                        const isEx = excludedNumbers.includes(item.num);
-                        return (
-                          <TouchableOpacity
-                            key={`least-b-${item.num}`}
-                            style={styles.statBallItem}
-                            onPress={() => toggleExcludeNumber(item.num)}
-                            activeOpacity={0.7}
-                          >
-                            <View
-                              style={[
-                                styles.statBallMini,
-                                { backgroundColor: getBallColor(item.num) },
-                                isEx && styles.statBallMiniExcluded,
-                              ]}
-                            >
-                              <Text style={[styles.statBallMiniText, isEx && styles.statBallMiniTextExcluded]}>
-                                {item.num}
-                              </Text>
-                              {isEx && <Text style={styles.strikeMarkMini}>✕</Text>}
-                            </View>
-                            <Text style={styles.statCountBadge}>{item.count}회</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </View>
-                </>
-              )}
+              <View style={styles.statsPanel}>
+                <View style={styles.statsPanelHeader}>
+                  <Text style={styles.statsPanelTitle}>❄️ 최소 출현 번호 (터치 시 제외/해제):</Text>
+                </View>
+                <View style={styles.statsBallsRow}>
+                  {leastList.map((item) => {
+                    const isEx = excludedNumbers.includes(item.num);
+                    return (
+                      <TouchableOpacity
+                        key={`least-b-${item.num}`}
+                        style={styles.statBallItem}
+                        onPress={() => toggleExcludeNumber(item.num)}
+                        activeOpacity={0.7}
+                      >
+                        <View
+                          style={[
+                            styles.statBallMini,
+                            { backgroundColor: getBallColor(item.num) },
+                            isEx && styles.statBallMiniExcluded,
+                          ]}
+                        >
+                          <Text style={[styles.statBallMiniText, isEx && styles.statBallMiniTextExcluded]}>
+                            {item.num}
+                          </Text>
+                          {isEx && <Text style={styles.strikeMarkMini}>✕</Text>}
+                        </View>
+                        <Text style={styles.statCountBadge}>{item.count}회</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
 
               {/* 1~45 전체 로또 볼 선택 영역 */}
               <View style={styles.excludeBallWrapper}>
                 {allNumbers.map((num) => {
                   const isExcluded = excludedNumbers.includes(num);
-                  const isFixed = fixedNumbers.includes(num);
 
                   return (
                     <TouchableOpacity
@@ -2181,15 +1837,8 @@ export default function App() {
                         styles.standardLottoBall,
                         { backgroundColor: getBallColor(num) },
                         isExcluded && styles.standardLottoBallExcluded,
-                        isFixed && styles.standardLottoBallFixed,
                       ]}
-                      onPress={() => {
-                        if (filterModalTab === 'EXCLUDE') {
-                          toggleExcludeNumber(num);
-                        } else {
-                          toggleFixedNumber(num);
-                        }
-                      }}
+                      onPress={() => toggleExcludeNumber(num)}
                       activeOpacity={0.7}
                     >
                       <Text
@@ -2204,12 +1853,6 @@ export default function App() {
                       {isExcluded && (
                         <View style={styles.ballStrikeBadge}>
                           <Text style={styles.ballStrikeX}>✕</Text>
-                        </View>
-                      )}
-
-                      {isFixed && (
-                        <View style={styles.ballFixedBadge}>
-                          <Text style={styles.ballFixedPin}>📌</Text>
                         </View>
                       )}
                     </TouchableOpacity>
@@ -2227,33 +1870,21 @@ export default function App() {
                 <Text style={styles.btnTextWhiteBold}>확인</Text>
               </TouchableOpacity>
 
-              {filterModalTab === 'EXCLUDE' ? (
-                <>
-                  <TouchableOpacity
-                    style={styles.excludeInvertPurpleBtn}
-                    onPress={handleInvertExcludeNumbers}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.btnTextWhiteBold}>🔄 반전선택</Text>
-                  </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.excludeInvertPurpleBtn}
+                onPress={handleInvertExcludeNumbers}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnTextWhiteBold}>🔄 반전선택</Text>
+              </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={styles.excludeResetBlueBtn}
-                    onPress={() => setExcludedNumbers([])}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.btnTextWhiteBold}>제외해제</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.excludeResetBlueBtn, { backgroundColor: '#059669', flex: 2 }]}
-                  onPress={() => setFixedNumbers([])}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.btnTextWhiteBold}>📌 고정수 전체해제</Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                style={styles.excludeResetBlueBtn}
+                onPress={() => setExcludedNumbers([])}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnTextWhiteBold}>제외해제</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -3207,20 +2838,6 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginTop: 2,
   },
-  appliedFixedBanner: {
-    backgroundColor: '#ecfdf5',
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-    borderRadius: 8,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    marginVertical: 4,
-  },
-  appliedFixedBannerText: {
-    color: '#047857',
-    fontSize: 11,
-    fontWeight: '800',
-  },
   headerRefreshBtn: {
     backgroundColor: '#eff6ff',
     borderWidth: 1,
@@ -3398,40 +3015,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     elevation: 10,
   },
-  filterTabContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#e2e8f0',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  filterTabItem: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterTabItemActive: {
-    backgroundColor: '#fee2e2',
-    borderBottomWidth: 3,
-    borderBottomColor: '#dc2626',
-  },
-  filterTabItemFixedActive: {
-    backgroundColor: '#dcfce7',
-    borderBottomWidth: 3,
-    borderBottomColor: '#16a34a',
-  },
-  filterTabItemText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#64748b',
-  },
-  filterTabItemTextActive: {
-    color: '#b91c1c',
-  },
-  filterTabItemFixedTextActive: {
-    color: '#15803d',
-  },
-  excludePopupHeader: {
+  excludeHeaderBox: {
     backgroundColor: '#d1d5db',
     paddingVertical: 12,
     paddingHorizontal: 16,
@@ -3440,13 +3024,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     position: 'relative',
   },
-  excludePopupTitle: {
-    fontSize: 19,
+  excludeHeaderTitle: {
+    fontSize: 18,
     fontWeight: '900',
-    color: '#374151',
+    color: '#1e293b',
   },
   excludeCloseTouch: {
-    paddingHorizontal: 12,
+    position: 'absolute',
+    right: 14,
+    padding: 4,
   },
   excludeCloseX: {
     fontSize: 20,
@@ -3462,12 +3048,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   excludeCountText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
     color: '#1e3a8a',
   },
   excludeCountHighlight: {
     color: '#2563eb',
+    fontSize: 13,
   },
   bonusToggleBtn: {
     backgroundColor: '#ffffff',
@@ -3489,6 +3076,72 @@ const styles = StyleSheet.create({
   bonusToggleBtnTextActive: {
     color: '#ffffff',
   },
+
+  // 4단계 공식 스마트 제외수 패널
+  smartFormulaPanel: {
+    backgroundColor: '#f8fafc',
+    marginHorizontal: 10,
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  smartFormulaHeaderRow: {
+    marginBottom: 6,
+  },
+  smartFormulaTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  smartAuto12Btn: {
+    backgroundColor: '#b91c1c',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    marginBottom: 8,
+    elevation: 2,
+  },
+  smartAuto12BtnTitle: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  smartAuto12BtnSub: {
+    color: '#fecaca',
+    fontSize: 9.5,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  formulaStepGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  formulaStepBtn: {
+    width: '48.8%',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+  },
+  formulaStepBtnTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#334155',
+  },
+  formulaStepBtnSub: {
+    fontSize: 9,
+    color: '#64748b',
+    marginTop: 1,
+    fontWeight: '600',
+  },
+
   quickExcludeRow: {
     flexDirection: 'row',
     paddingHorizontal: 10,
@@ -3510,57 +3163,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#b91c1c',
   },
-  excludeAnalysisTabRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    gap: 6,
-  },
-  analysisLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#475569',
-  },
-  roundTabBtn: {
-    flex: 1,
-    backgroundColor: '#f1f5f9',
-    paddingVertical: 5,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    alignItems: 'center',
-  },
-  roundTabBtnActive: {
-    backgroundColor: '#3b82f6',
-    borderColor: '#2563eb',
-  },
-  roundTabBtnText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748b',
-  },
-  roundTabBtnTextActive: {
-    color: '#ffffff',
-    fontWeight: '800',
-  },
-  autoOptionBtnRow: {
-    paddingHorizontal: 10,
-    paddingTop: 6,
-  },
-  autoOptionBtn: {
-    backgroundColor: '#e0e7ff',
-    borderWidth: 1,
-    borderColor: '#c7d2fe',
-    paddingVertical: 6,
-    borderRadius: 6,
-    alignItems: 'center',
-  },
-  autoOptionBtnText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#4338ca',
-  },
+
   statsPanel: {
     backgroundColor: '#f8fafc',
     marginHorizontal: 10,
@@ -3622,246 +3225,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // 최근 3주간 이월수 구별 및 고정수 지정 패널
-  carryOverSectionBox: {
-    backgroundColor: '#ffffff',
-    marginHorizontal: 10,
-    marginTop: 8,
-    padding: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-  },
-  carryOverHeaderRow: {
-    marginBottom: 6,
-  },
-  carryOverHeaderTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  carryOverWeekRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 4,
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    padding: 6,
-  },
-  carryOverWeekLabelBoxRed: {
-    width: 68,
-    backgroundColor: '#fee2e2',
-    borderRadius: 6,
-    paddingVertical: 4,
-    alignItems: 'center',
-    marginRight: 6,
-    borderWidth: 1,
-    borderColor: '#fca5a5',
-  },
-  carryOverWeekLabelBoxBlue: {
-    width: 68,
-    backgroundColor: '#e0f2fe',
-    borderRadius: 6,
-    paddingVertical: 4,
-    alignItems: 'center',
-    marginRight: 6,
-    borderWidth: 1,
-    borderColor: '#bae6fd',
-  },
-  carryOverWeekLabelBoxGreen: {
-    width: 68,
-    backgroundColor: '#dcfce7',
-    borderRadius: 6,
-    paddingVertical: 4,
-    alignItems: 'center',
-    marginRight: 6,
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-  },
-  carryOverWeekLabelText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  carryOverWeekSubText: {
-    fontSize: 9,
-    color: '#64748b',
-    fontWeight: '700',
-  },
-  carryOverBallsFlex: {
-    flex: 1,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 5,
-  },
-  carryOverBallTouch: {
-    position: 'relative',
-    alignItems: 'center',
-  },
-  carryOverBallTouchFixed: {
-    transform: [{ scale: 1.08 }],
-  },
-  carryOverBallCircle: {
-    width: 27,
-    height: 27,
-    borderRadius: 13.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  carryOverBallCircleText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  carryOverPinMark: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    fontSize: 9,
-  },
-  doubleWarnBadge: {
-    position: 'absolute',
-    bottom: -6,
-    backgroundColor: '#dc2626',
-    borderRadius: 4,
-    paddingHorizontal: 2,
-  },
-  doubleWarnBadgeText: {
-    color: '#ffffff',
-    fontSize: 7,
-    fontWeight: '900',
-  },
-  doubleCarryInfoBar: {
-    marginTop: 6,
-    backgroundColor: '#fffbeb',
-    borderRadius: 6,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderWidth: 1,
-    borderColor: '#fde68a',
-  },
-  doubleCarryInfoText: {
-    fontSize: 10,
-    color: '#b45309',
-    fontWeight: '700',
-  },
-
-  // 고정수 4대 프리셋 관련 스타일
-  fixedPresetContainer: {
-    backgroundColor: '#f0fdf4',
-    marginHorizontal: 10,
-    marginTop: 8,
-    padding: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-  },
-  fixedPresetTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#166534',
-    marginBottom: 8,
-  },
-  presetButtonGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  presetSelectBtn: {
-    width: '48.8%',
-    backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: '#86efac',
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-  },
-  presetSelectBtnActive: {
-    backgroundColor: '#15803d',
-    borderColor: '#14532d',
-  },
-  presetSelectBtnTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  presetSelectBtnTitleActive: {
-    color: '#ffffff',
-  },
-  presetSelectBtnSub: {
-    fontSize: 9,
-    color: '#65a30d',
-    marginTop: 2,
-  },
-  presetResultContainer: {
-    marginTop: 10,
-    backgroundColor: '#ffffff',
-    padding: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#dcfce7',
-  },
-  presetResultHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  presetResultHeaderText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#374151',
-  },
-  quickAdd5Text: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#059669',
-    backgroundColor: '#ecfdf5',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-  },
-  presetEmptyText: {
-    fontSize: 11,
-    color: '#9ca3af',
-    textAlign: 'center',
-    paddingVertical: 6,
-  },
-  presetBallsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    paddingVertical: 4,
-  },
-  presetBallTouch: {
-    position: 'relative',
-    alignItems: 'center',
-  },
-  presetBallTouchFixed: {
-    transform: [{ scale: 1.08 }],
-  },
-  presetBallCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  presetBallCircleText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  presetPinMark: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    fontSize: 10,
-  },
-
   // 로또 볼 그리드
   excludeBallWrapper: {
     flexDirection: 'row',
@@ -3890,11 +3253,6 @@ const styles = StyleSheet.create({
     opacity: 0.35,
     elevation: 0,
   },
-  standardLottoBallFixed: {
-    borderWidth: 3,
-    borderColor: '#15803d',
-    transform: [{ scale: 1.08 }],
-  },
   standardLottoBallTextExcluded: {
     color: '#64748b',
     textDecorationLine: 'line-through',
@@ -3909,20 +3267,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
   },
-  ballFixedBadge: {
-    position: 'absolute',
-    top: -5,
-    right: -5,
-    backgroundColor: '#15803d',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ballFixedPin: {
-    fontSize: 10,
-  },
+
   excludePopupBtnRow: {
     flexDirection: 'row',
     paddingHorizontal: 14,
@@ -3956,6 +3301,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+
   manualSelectionBar: {
     backgroundColor: '#f1f5f9',
     paddingVertical: 10,
@@ -4270,23 +3616,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     elevation: 2,
     position: 'relative',
-  },
-  fixedBallHighlight: {
-    borderWidth: 2,
-    borderColor: '#15803d',
-  },
-  fixedBallBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    backgroundColor: '#15803d',
-    borderRadius: 4,
-    paddingHorizontal: 2,
-  },
-  fixedBallBadgeText: {
-    color: '#ffffff',
-    fontSize: 7,
-    fontWeight: '900',
   },
   ballText: {
     color: '#ffffff',
