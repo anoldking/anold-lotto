@@ -132,7 +132,7 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 20대 핵심 조건 통합 판별기
+// 20대 핵심 조건 통합 판별기 (수정 최적화 반영)
 const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
@@ -145,13 +145,13 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const range = maxNum - minNum;
   if (range < 25 || range > 44) return false;
 
-  // 3. 인접한 수들의 가장 큰 차이값 (6 ~ 20 사이, 21 이상 차단)
+  // 3. 인접한 수들의 가장 큰 차이값 (수정: 6 ~ 25 사이, 26 이상 차단)
   let maxAdjacentDiff = 0;
   for (let i = 0; i < sorted.length - 1; i++) {
     const diff = sorted[i + 1] - sorted[i];
     if (diff > maxAdjacentDiff) maxAdjacentDiff = diff;
   }
-  if (maxAdjacentDiff < 6 || maxAdjacentDiff > 20) return false;
+  if (maxAdjacentDiff < 6 || maxAdjacentDiff > 25) return false;
 
   // 4. 번호 총합 (100 ~ 180 사이)
   const sum = sorted.reduce((acc, cur) => acc + cur, 0);
@@ -177,11 +177,11 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const mult3Count = sorted.filter((n) => n % 3 === 0).length;
   if (mult3Count < 1 || mult3Count > 3) return false;
 
-  // 10. 5의 배수 (최대 1개 허용, 2개 이상 차단)
+  // 10. 5의 배수 (수정: 최대 2개 허용, 3개 이상 차단)
   const mult5Count = sorted.filter((n) => n % 5 === 0).length;
-  if (mult5Count >= 2) return false;
+  if (mult5Count >= 3) return false;
 
-  // 11. 쌍둥이수 (최대 1개 허용, 2개 이상 차단)
+  // 11. 쌍둥이수 (최대 1개까지만 허용, 2개 이상 차단)
   const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
   if (twinCount >= 2) return false;
 
@@ -193,7 +193,7 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
     if (lastDigitCounts[d] >= 3) return false;
   }
 
-  // 13. 연속번호(3연번 차단 & 2연번은 최대 1쌍만 허용)
+  // 13. 연속번호 (3연번 차단 & 2연번은 최대 1쌍만 허용)
   let consecutivePairs = 0;
   for (let i = 0; i < sorted.length - 1; i++) {
     if (sorted[i + 1] - sorted[i] === 1) {
@@ -207,7 +207,7 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   if (consecutivePairs > 1) return false;
 
   // 14. 10단위 5개 구간(단번/10번/20번/30번/40번) 멸 개수 (1 ~ 2개 구간 전멸)
-  const sectionCounts = [0, 0, 0, 0, 0]; // 1~9, 10~19, 20~29, 30~39, 40~45
+  const sectionCounts = [0, 0, 0, 0, 0];
   sorted.forEach((n) => {
     if (n <= 9) sectionCounts[0]++;
     else if (n <= 19) sectionCounts[1]++;
@@ -248,52 +248,17 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
       if (sorted.some((n) => hot10w4.includes(n))) return false;
     }
 
-    // 20. 20주간 5회 이상 과열수 차단 & 20주간 미출현(콜드수) 차단
+    // 20. 20주간 5회 이상 과열수 차단 & 20주간 미출현(콜드수) 2개 이상 차단 (수정: 최대 1개 허용)
     if (hot20w5 && hot20w5.length > 0) {
       if (sorted.some((n) => hot20w5.includes(n))) return false;
     }
     if (cold20w && cold20w.length > 0) {
-      if (sorted.some((n) => cold20w.includes(n))) return false;
+      const coldCount = sorted.filter((n) => cold20w.includes(n)).length;
+      if (coldCount >= 2) return false; // 최대 1개 허용
     }
   }
 
   return true;
-};
-
-// QR 파서
-const parseLottoQrUrl = (url) => {
-  try {
-    const vIndex = url.indexOf('?v=') !== -1 ? url.indexOf('?v=') + 3 : (url.indexOf('&v=') !== -1 ? url.indexOf('&v=') + 3 : -1);
-    if (vIndex === -1) return null;
-
-    const vParam = url.substring(vIndex).split('&')[0];
-    const roundMatch = vParam.match(/^(\d{1,5})/);
-    if (!roundMatch) return null;
-
-    const round = parseInt(roundMatch[1], 10);
-    const body = vParam.substring(roundMatch[1].length);
-
-    const rawGames = body.split(/[a-zA-Z]+/).filter((str) => str.length >= 12);
-
-    const parsedGames = rawGames.map((gameStr) => {
-      const numbers = [];
-      const chunk = gameStr.slice(0, 12);
-      for (let i = 0; i < 12; i += 2) {
-        const num = parseInt(chunk.substring(i, i + 2), 10);
-        if (num >= 1 && num <= 45) {
-          numbers.push(num);
-        }
-      }
-      return numbers.sort((a, b) => a - b);
-    }).filter((g) => g.length === 6);
-
-    if (parsedGames.length === 0) return null;
-
-    return { round, games: parsedGames };
-  } catch (err) {
-    console.error('QR 파싱 실패:', err);
-    return null;
-  }
 };
 
 export default function App() {
@@ -485,7 +450,6 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
-  // 동적 통계 데이터 컨텍스트 생성 (과열수/미출현수/연속이월수 추출)
   const getDynamicContextData = useCallback(() => {
     const round1 = getLottoNumbersByRound(latestRound);
     const round2 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1) : null;
@@ -495,7 +459,6 @@ export default function App() {
 
     const doubleCarryOver = list1.filter((n) => list2.includes(n));
 
-    // 최근 5주, 10주, 20주 빈도 계산
     const counts5 = {};
     const counts10 = {};
     const counts20 = {};
@@ -532,7 +495,7 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
-  // 20대 조건 완벽 적용 5세트 생성기
+  // 20대 조건 완벽 적용 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -548,17 +511,14 @@ export default function App() {
         }
       }
 
-      // 15,000회 내 미충족 시 기본 조건으로 폴백
       return generateBasicLottoSet(excluded);
     },
     [getDynamicContextData]
   );
 
-  // 제외수 4단계 추천 추출
   const getExcludeAnalysisData = useCallback(() => {
     const { round1Numbers, doubleCarryOver, hot10w4 } = getDynamicContextData();
 
-    // 3단계: 직전 회차 2개 이상 겹친 끝수 그룹의 번호들
     const lastDigitsCount = {};
     round1Numbers.forEach((n) => {
       const d = n % 10;
@@ -569,7 +529,6 @@ export default function App() {
       .map(([d]) => Number(d));
     const crowdedDigitNumbers = allNumbers.filter((n) => crowdedDigits.includes(n % 10));
 
-    // 4단계: 직전 회차 2개 이상 몰렸던 가로행 및 세로열 번호들
     const rowCounts = [0, 0, 0, 0, 0, 0, 0];
     const colCounts = [0, 0, 0, 0, 0, 0, 0];
     round1Numbers.forEach((n) => {
@@ -1775,7 +1734,6 @@ export default function App() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 490 }}>
-              {/* 4단계 공식 기반 스마트 원터치 제외 컨트롤 패널 */}
               <View style={styles.smartFormulaPanel}>
                 <View style={styles.smartFormulaHeaderRow}>
                   <Text style={styles.smartFormulaTitle}>🎯 통계 공식 기반 추천 제외수 원터치 적용</Text>
@@ -1869,7 +1827,6 @@ export default function App() {
                 </View>
               </View>
 
-              {/* 기본 빠른 제외 버튼 */}
               <View style={styles.quickExcludeRow}>
                 <TouchableOpacity
                   style={styles.quickExcludeBtn}
@@ -1908,7 +1865,6 @@ export default function App() {
                 </TouchableOpacity>
               </View>
 
-              {/* 1~45 전체 로또 볼 선택 영역 */}
               <View style={styles.excludeBallWrapper}>
                 {allNumbers.map((num) => {
                   const isExcluded = excludedNumbers.includes(num);
@@ -2340,6 +2296,7 @@ export default function App() {
 
             {analysisTargetData && (
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
+                {/* 6개 번호 표시 바 */}
                 <View style={styles.analysisBallsCard}>
                   <View style={styles.analysisBallsRow}>
                     {analysisTargetData.numbers.map((n) => (
@@ -3157,7 +3114,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 
-  // 스마트 제외수 컨트롤 패널
   smartFormulaPanel: {
     backgroundColor: '#f8fafc',
     marginHorizontal: 10,
@@ -3242,67 +3198,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#b91c1c',
-  },
-
-  statsPanel: {
-    backgroundColor: '#f8fafc',
-    marginHorizontal: 10,
-    marginTop: 6,
-    padding: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  statsPanelHeader: {
-    marginBottom: 6,
-  },
-  statsPanelTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#334155',
-  },
-  statsBallsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  statBallItem: {
-    alignItems: 'center',
-    width: 44,
-  },
-  statBallMini: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    elevation: 2,
-  },
-  statBallMiniExcluded: {
-    backgroundColor: '#cbd5e1',
-    opacity: 0.4,
-  },
-  statBallMiniText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  statBallMiniTextExcluded: {
-    color: '#64748b',
-    textDecorationLine: 'line-through',
-  },
-  strikeMarkMini: {
-    position: 'absolute',
-    color: '#dc2626',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  statCountBadge: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#64748b',
-    marginTop: 2,
   },
 
   excludeBallWrapper: {
@@ -3803,7 +3698,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // 용지 마킹 패턴표 옵션 토글 바
   patternToggleControlRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3901,7 +3795,6 @@ const styles = StyleSheet.create({
     borderRadius: 1,
   },
 
-  // 용지 오버레이 닷
   overlayDotContainer: {
     position: 'absolute',
     top: 2,
