@@ -134,6 +134,7 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
   const minNum = sorted[0];
   const maxNum = sorted[5];
 
+  // 기본 간격 & 고저차
   if (minNum > 15 || maxNum < 30) return false;
   const range = maxNum - minNum;
   if (range < 25 || range > 44) return false;
@@ -499,6 +500,7 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
+  // 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -676,6 +678,7 @@ export default function App() {
     Alert.alert('스마트 추천 제외수 적용', `총 ${finalResult.length}개 추천 번호가 제외수로 설정되었습니다.\n\n번호: ${finalResult.join(', ')}`);
   };
 
+  // 공용 정밀 분석 데이터 생성기 (최신 당첨번호 기준)
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -860,6 +863,71 @@ export default function App() {
     return flat;
   }, [savedSets, gameLabels]);
 
+  // 저장번호 정밀분석 화면에서 현재 보고 있는 게임 직접 삭제 핸들러
+  const handleDeleteGameFromAnalysis = (targetIndex) => {
+    const flatList = getFlatSavedGames();
+    if (targetIndex < 0 || targetIndex >= flatList.length) return;
+    const target = flatList[targetIndex];
+
+    Alert.alert('저장 번호 삭제', `${target.gameLabel} 게임을 보관함에서 삭제하시겠습니까?`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const updated = savedSets
+              .map((item) => {
+                if (item.id === target.id) {
+                  const remainingGames = item.games.filter((_, idx) => idx !== target.gIdx);
+                  return { ...item, games: remainingGames };
+                }
+                return item;
+              })
+              .filter((item) => item.games.length > 0);
+
+            setSavedSets(updated);
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+
+            const newFlat = [];
+            updated.forEach((item) => {
+              item.games.forEach((g, gIdx) => {
+                const label = item.games.length === 1 ? '수동' : gameLabels[gIdx];
+                newFlat.push({
+                  id: item.id,
+                  date: item.date,
+                  game: g,
+                  gIdx,
+                  gameLabel: label,
+                });
+              });
+            });
+
+            if (newFlat.length === 0) {
+              setIsAnalysisModalVisible(false);
+              Alert.alert('삭제 완료', '모든 저장 번호가 삭제되었습니다.');
+            } else {
+              const nextIdx = Math.min(targetIndex, newFlat.length - 1);
+              const nextTarget = newFlat[nextIdx];
+              const result = calculateNumbersAnalysis(
+                nextTarget.game,
+                latestRound,
+                `저장 번호 정밀 분석 (${nextTarget.gameLabel})`,
+                `저장일시: ${nextTarget.date} | 최신 제${latestRound}회 공식 기준 심층 분석`,
+                null,
+                'SAVED',
+                nextIdx
+              );
+              setAnalysisTargetData(result);
+            }
+          } catch (e) {
+            Alert.alert('삭제 오류', '게임을 삭제하는 중 문제가 발생했습니다.');
+          }
+        },
+      },
+    ]);
+  };
+
   const navigateWinningAnalysis = async (targetRound) => {
     if (targetRound < 1 || targetRound > latestRound) return;
     let roundData = getLottoNumbersByRound(targetRound);
@@ -878,7 +946,7 @@ export default function App() {
       roundData.numbers,
       targetRound,
       `제 ${targetRound}회 당첨번호 정밀 분석`,
-      `최신 제${latestRound}회 공식 기준 심층 데이터 분석`,
+      `제${latestRound}회 최신 공식 기준 심층 데이터 분석`,
       roundData.bnusNo,
       'WINNING',
       targetRound
@@ -1902,7 +1970,6 @@ export default function App() {
                 </View>
 
                 <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 480 }}>
-                  {/* 최근 포함 기준 4단계 과열수 & 20주/30주 미출현 번호 제외 패널 */}
                   <View style={styles.overheatedSectionBox}>
                     <Text style={styles.overheatedSectionTitle}>
                       🔥 최근 포함 기준 과열 출현 번호 (터치 시 제외 등록):
@@ -1946,7 +2013,6 @@ export default function App() {
                       </TouchableOpacity>
                     </View>
 
-                    {/* 20주 미출현 & 30주 미출현 번호 제외 버튼 행 */}
                     <Text style={[styles.overheatedSectionTitle, { marginTop: 10, color: '#1e3a8a' }]}>
                       ❄️ 장기 미출현 번호 (터치 시 제외 등록):
                     </Text>
@@ -1971,7 +2037,6 @@ export default function App() {
                     </View>
                   </View>
 
-                  {/* 4단계 공식 추천 제외수 패널 */}
                   <View style={styles.smartFormulaPanel}>
                     <View style={styles.smartFormulaHeaderRow}>
                       <Text style={styles.smartFormulaTitle}>🎯 통계 공식 기반 추천 제외수 원터치 적용</Text>
@@ -2065,7 +2130,6 @@ export default function App() {
                     </View>
                   </View>
 
-                  {/* 1~45 전체 로또 볼 선택 영역 */}
                   <View style={styles.excludeBallWrapper}>
                     {allNumbers.map((num) => {
                       const isExcluded = excludedNumbers.includes(num);
@@ -2128,7 +2192,6 @@ export default function App() {
                 </View>
               </>
             ) : (
-              /* [탭 2] 12대 필터 ON/OFF 직접 편집 패널 */
               <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 520, padding: 12 }}>
                 <Text style={styles.filterEditorGuide}>
                   💡 번호 생성 시 적용할 필터 규칙을 직접 켜고 끌 수 있습니다.
@@ -2295,7 +2358,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 6] 전회차 당첨결과 모달 (전체화면 적용 - 하단 메인 화면 노출 완전 차단) */}
+      {/* [모달 6] 전회차 당첨결과 모달 (전체화면 - 하단 메인 화면 제거) */}
       <Modal
         visible={isWinningModalVisible}
         animationType="slide"
@@ -2528,6 +2591,7 @@ export default function App() {
               </View>
             )}
 
+            {/* 저장번호 정밀분석 네비게이션: 현재 번호 옆에 [🗑️ 삭제] 버튼 추가 */}
             {analysisTargetData?.sourceType === 'SAVED' && (
               <View style={styles.analysisNavSubBar}>
                 <TouchableOpacity
@@ -2551,9 +2615,19 @@ export default function App() {
                 </TouchableOpacity>
 
                 <View style={styles.analysisNavCenterInfo}>
-                  <Text style={styles.analysisNavRoundBadge}>
-                    {analysisTargetData.sourceIndex + 1} / {getFlatSavedGames().length}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.analysisNavRoundBadge}>
+                      {analysisTargetData.sourceIndex + 1} / {getFlatSavedGames().length}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.analysisDeleteBtn}
+                      onPress={() => handleDeleteGameFromAnalysis(analysisTargetData.sourceIndex)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.analysisDeleteBtnText}>🗑️ 삭제</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
                 <TouchableOpacity
@@ -2580,6 +2654,7 @@ export default function App() {
 
             {analysisTargetData && (
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
+                {/* 1. 번호 볼 표시 바 */}
                 <View style={styles.analysisBallsCard}>
                   <View style={styles.analysisBallsRow}>
                     {analysisTargetData.numbers.map((n) => (
@@ -2598,94 +2673,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 특수수 및 핵심 패턴 심층 지표 카드 */}
-                <View style={styles.analysisSectionCard}>
-                  <Text style={styles.analysisSectionTitle}>
-                    🔍 특수수 및 핵심 패턴 심층 지표
-                  </Text>
-
-                  <View style={styles.detailMetricGrid}>
-                    <View style={styles.detailMetricCard}>
-                      <Text style={styles.detailMetricHeader}>소수 & 합성수 (1포함)</Text>
-                      <Text style={styles.detailMetricValue}>
-                        소수 <Text style={{ color: '#0284c7', fontWeight: '900' }}>{analysisTargetData.primeNumbers.length}개</Text> : 합성수 <Text style={{ color: '#475569', fontWeight: '900' }}>{analysisTargetData.compositeNumbers.length}개</Text>
-                      </Text>
-                      <Text style={styles.detailMetricSub}>
-                        {analysisTargetData.primeNumbers.length > 0 ? `소수: [${analysisTargetData.primeNumbers.join(', ')}]` : '소수 없음'}
-                      </Text>
-                    </View>
-
-                    <View style={styles.detailMetricCard}>
-                      <Text style={styles.detailMetricHeader}>3의 배수 & 5의 배수</Text>
-                      <Text style={styles.detailMetricValue}>
-                        3배수 <Text style={{ color: '#16a34a', fontWeight: '900' }}>{analysisTargetData.mult3Numbers.length}개</Text> | 5배수 <Text style={{ color: '#d97706', fontWeight: '900' }}>{analysisTargetData.mult5Numbers.length}개</Text>
-                      </Text>
-                      <Text style={styles.detailMetricSub}>
-                        {analysisTargetData.mult5Numbers.length > 0 ? `5배수: [${analysisTargetData.mult5Numbers.join(', ')}]` : '5배수 없음'}
-                      </Text>
-                    </View>
-
-                    <View style={styles.detailMetricCard}>
-                      <Text style={styles.detailMetricHeader}>쌍둥이수 (11,22,33,44)</Text>
-                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.twinNumbers.length > 0 ? '#7c3aed' : '#64748b' }]}>
-                        {analysisTargetData.twinNumbers.length > 0 ? `총 ${analysisTargetData.twinNumbers.length}개 [${analysisTargetData.twinNumbers.join(', ')}]` : '없음 (0개)'}
-                      </Text>
-                      <Text style={styles.detailMetricSub}>
-                        {analysisTargetData.twinNumbers.length >= 2 ? '⚠️ 과밀 출현' : '안정 밸런스'}
-                      </Text>
-                    </View>
-
-                    <View style={styles.detailMetricCard}>
-                      <Text style={styles.detailMetricHeader}>동일 끝수 중복 현황</Text>
-                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.sameEndPairs.length > 0 ? '#dc2626' : '#64748b' }]}>
-                        {analysisTargetData.sameEndPairs.length > 0
-                          ? analysisTargetData.sameEndPairs.map(([d, list]) => `${d}끝(${list.length}개)`).join(', ')
-                          : '끝수 중복 없음'}
-                      </Text>
-                      <Text style={styles.detailMetricSub}>
-                        {analysisTargetData.sameEndPairs.length > 0
-                          ? analysisTargetData.sameEndPairs.map(([_, list]) => `[${list.join(',')}]`).join(' ')
-                          : '모든 번호 끝수 고유'}
-                      </Text>
-                    </View>
-
-                    <View style={styles.detailMetricCardFull}>
-                      <Text style={styles.detailMetricHeader}>연속번호(연번) 구성</Text>
-                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.consecutivePairsList.length > 0 ? '#2563eb' : '#64748b' }]}>
-                        {analysisTargetData.consecutivePairsList.length > 0
-                          ? `총 ${analysisTargetData.consecutivePairsList.length}쌍 출현 [${analysisTargetData.consecutivePairsList.join(', ')}]`
-                          : '연속 번호 없음 (단독 번호)'}
-                      </Text>
-                    </View>
-
-                    <View style={styles.detailMetricCardFull}>
-                      <Text style={styles.detailMetricHeader}>🔥 핫수(최단기 출현) & ❄️ 콜드수(최장기 미출)</Text>
-                      <View style={styles.hotColdRow}>
-                        <View style={styles.hotBadgeBox}>
-                          <Text style={styles.hotBadgeTitle}>🔥 핫수 (최단기 출현)</Text>
-                          <Text style={styles.hotBadgeNum}>
-                            {analysisTargetData.hotNumbersInSet.join(', ')}번
-                          </Text>
-                          <Text style={styles.hotBadgeSub}>
-                            {analysisTargetData.minAbsenceVal === 0 ? '최신 공식회차 출현수' : `최신 기준 ${analysisTargetData.minAbsenceVal}주 미출`}
-                          </Text>
-                        </View>
-
-                        <View style={styles.coldBadgeBox}>
-                          <Text style={styles.coldBadgeTitle}>❄️ 콜드수 (최장기 미출)</Text>
-                          <Text style={styles.coldBadgeNum}>
-                            {analysisTargetData.coldNumbersInSet.join(', ')}번
-                          </Text>
-                          <Text style={styles.coldBadgeSub}>
-                            {analysisTargetData.maxAbsenceVal === 0 ? '최신 공식회차 출현' : `최신 기준 ${analysisTargetData.maxAbsenceVal}주 미출`}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  </View>
-                </View>
-
-                {/* 로또 용지 마킹 패턴표 (7x7 SLIP) */}
+                {/* 2. [위치 이동] 저장번호 바로 아래로 로또 용지 마킹 패턴표 배치 */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
@@ -2804,7 +2792,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 5가지 기본 핵심 지표 */}
+                {/* 3. 5가지 기본 핵심 지표 */}
                 <View style={styles.metricGrid}>
                   <View style={styles.metricItem}>
                     <Text style={styles.metricLabel}>홀짝 비율</Text>
@@ -2856,6 +2844,94 @@ export default function App() {
                   </View>
                 </View>
 
+                {/* 4. [위치 이동] 특수수 및 핵심 패턴 심층 지표 (누적 당첨 횟수 바로 위로 이동) */}
+                <View style={styles.analysisSectionCard}>
+                  <Text style={styles.analysisSectionTitle}>
+                    🔍 특수수 및 핵심 패턴 심층 지표
+                  </Text>
+
+                  <View style={styles.detailMetricGrid}>
+                    <View style={styles.detailMetricCard}>
+                      <Text style={styles.detailMetricHeader}>소수 & 합성수 (1포함)</Text>
+                      <Text style={styles.detailMetricValue}>
+                        소수 <Text style={{ color: '#0284c7', fontWeight: '900' }}>{analysisTargetData.primeNumbers.length}개</Text> : 합성수 <Text style={{ color: '#475569', fontWeight: '900' }}>{analysisTargetData.compositeNumbers.length}개</Text>
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        {analysisTargetData.primeNumbers.length > 0 ? `소수: [${analysisTargetData.primeNumbers.join(', ')}]` : '소수 없음'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.detailMetricCard}>
+                      <Text style={styles.detailMetricHeader}>3의 배수 & 5의 배수</Text>
+                      <Text style={styles.detailMetricValue}>
+                        3배수 <Text style={{ color: '#16a34a', fontWeight: '900' }}>{analysisTargetData.mult3Numbers.length}개</Text> | 5배수 <Text style={{ color: '#d97706', fontWeight: '900' }}>{analysisTargetData.mult5Numbers.length}개</Text>
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        {analysisTargetData.mult5Numbers.length > 0 ? `5배수: [${analysisTargetData.mult5Numbers.join(', ')}]` : '5배수 없음'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.detailMetricCard}>
+                      <Text style={styles.detailMetricHeader}>쌍둥이수 (11,22,33,44)</Text>
+                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.twinNumbers.length > 0 ? '#7c3aed' : '#64748b' }]}>
+                        {analysisTargetData.twinNumbers.length > 0 ? `총 ${analysisTargetData.twinNumbers.length}개 [${analysisTargetData.twinNumbers.join(', ')}]` : '없음 (0개)'}
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        {analysisTargetData.twinNumbers.length >= 2 ? '⚠️ 과밀 출현' : '안정 밸런스'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.detailMetricCard}>
+                      <Text style={styles.detailMetricHeader}>동일 끝수 중복 현황</Text>
+                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.sameEndPairs.length > 0 ? '#dc2626' : '#64748b' }]}>
+                        {analysisTargetData.sameEndPairs.length > 0
+                          ? analysisTargetData.sameEndPairs.map(([d, list]) => `${d}끝(${list.length}개)`).join(', ')
+                          : '끝수 중복 없음'}
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        {analysisTargetData.sameEndPairs.length > 0
+                          ? analysisTargetData.sameEndPairs.map(([_, list]) => `[${list.join(',')}]`).join(' ')
+                          : '모든 번호 끝수 고유'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.detailMetricCardFull}>
+                      <Text style={styles.detailMetricHeader}>연속번호(연번) 구성</Text>
+                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.consecutivePairsList.length > 0 ? '#2563eb' : '#64748b' }]}>
+                        {analysisTargetData.consecutivePairsList.length > 0
+                          ? `총 ${analysisTargetData.consecutivePairsList.length}쌍 출현 [${analysisTargetData.consecutivePairsList.join(', ')}]`
+                          : '연속 번호 없음 (단독 번호)'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.detailMetricCardFull}>
+                      <Text style={styles.detailMetricHeader}>🔥 핫수(최단기 출현) & ❄️ 콜드수(최장기 미출)</Text>
+                      <View style={styles.hotColdRow}>
+                        <View style={styles.hotBadgeBox}>
+                          <Text style={styles.hotBadgeTitle}>🔥 핫수 (최단기 출현)</Text>
+                          <Text style={styles.hotBadgeNum}>
+                            {analysisTargetData.hotNumbersInSet.join(', ')}번
+                          </Text>
+                          <Text style={styles.hotBadgeSub}>
+                            {analysisTargetData.minAbsenceVal === 0 ? '최신 공식회차 출현수' : `최신 기준 ${analysisTargetData.minAbsenceVal}주 미출`}
+                          </Text>
+                        </View>
+
+                        <View style={styles.coldBadgeBox}>
+                          <Text style={styles.coldBadgeTitle}>❄️ 콜드수 (최장기 미출)</Text>
+                          <Text style={styles.coldBadgeNum}>
+                            {analysisTargetData.coldNumbersInSet.join(', ')}번
+                          </Text>
+                          <Text style={styles.coldBadgeSub}>
+                            {analysisTargetData.maxAbsenceVal === 0 ? '최신 공식회차 출현' : `최신 기준 ${analysisTargetData.maxAbsenceVal}주 미출`}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+
+                {/* 5. 역대 회차 누적 등수별 당첨 횟수 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🏆 역대 회차 누적 등수별 당첨 횟수
@@ -2876,6 +2952,7 @@ export default function App() {
                   </View>
                 </View>
 
+                {/* 6. 번호별 최근 30회 빈도 및 직전 미출현 주기 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     📈 번호별 최근 30회 빈도 및 직전 미출현 주기 (최신 제{latestRound}회 기준)
@@ -2904,6 +2981,7 @@ export default function App() {
                   ))}
                 </View>
 
+                {/* 7. 번호간 동반 출현 횟수 TOP 3 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🤝 번호간 동반 출현 횟수 TOP 3 (케미 번호)
@@ -3231,7 +3309,6 @@ const styles = StyleSheet.create({
     maxHeight: '94%',
   },
 
-  // 전체화면 전용 스타일
   fullScreenModalContainer: {
     flex: 1,
     backgroundColor: '#ffffff',
@@ -3317,6 +3394,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
     color: '#0f172a',
+  },
+  analysisDeleteBtn: {
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  analysisDeleteBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#dc2626',
   },
 
   manualTopOptionBtn: {
