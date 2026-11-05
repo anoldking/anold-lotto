@@ -128,7 +128,7 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 번호 생성 검증 판별기 (과열수 조건은 제외수에서만 관리하도록 분리)
+// 번호 생성 검증 판별기
 const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLimit = 3) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
@@ -545,7 +545,7 @@ export default function App() {
     }));
   };
 
-  // [신규] 최근 회차 포함 기준 N주간 M회 이상 출현한 과열수 계산 유틸
+  // 최근 회차 포함 기준 N주간 M회 이상 출현한 번호 계산 유틸
   const getOverheatedNumbers = useCallback(
     (weekCount, minOccurrences) => {
       const counts = {};
@@ -571,6 +571,24 @@ export default function App() {
     [latestRound, includeBonusInExclude, getLottoNumbersByRound]
   );
 
+  // [신규] 최근 N주간 한 번도 출현하지 않은 미출현(콜드) 번호 계산 유틸
+  const getColdNumbers = useCallback(
+    (weekCount) => {
+      const appearedSet = new Set();
+      for (let r = latestRound; r > Math.max(0, latestRound - weekCount); r--) {
+        const rData = getLottoNumbersByRound(r);
+        if (rData && rData.numbers && !rData.isPending) {
+          rData.numbers.forEach((num) => appearedSet.add(num));
+          if (includeBonusInExclude && rData.bnusNo) {
+            appearedSet.add(rData.bnusNo);
+          }
+        }
+      }
+      return allNumbers.filter((n) => !appearedSet.has(n));
+    },
+    [latestRound, includeBonusInExclude, getLottoNumbersByRound, allNumbers]
+  );
+
   // 과열수 번호를 제외수 목록에 추가하는 핸들러
   const handleAddOverheatedToExclude = (weekCount, minOccurrences, label) => {
     const matched = getOverheatedNumbers(weekCount, minOccurrences);
@@ -592,10 +610,30 @@ export default function App() {
     );
   };
 
+  // [신규] N주간 미출현 번호를 제외수에 추가하는 핸들러
+  const handleAddColdToExclude = (weekCount, label) => {
+    const matched = getColdNumbers(weekCount);
+    if (matched.length === 0) {
+      Alert.alert('알림', `${label} 조건에 해당하는 번호가 없습니다.`);
+      return;
+    }
+
+    const merged = Array.from(new Set([...excludedNumbers, ...matched])).sort((a, b) => a - b);
+    if (merged.length > 39) {
+      Alert.alert('알림', `제외수가 ${merged.length}개로 한도(39개)를 초과하여 추가할 수 없습니다.`);
+      return;
+    }
+
+    setExcludedNumbers(merged);
+    Alert.alert(
+      '제외수 등록 완료',
+      `${label} (${matched.length}개): [${matched.join(', ')}]\n\n제외수에 성공적으로 추가되었습니다.`
+    );
+  };
+
   const getExcludeAnalysisData = useCallback(() => {
     const { round1Numbers, doubleCarryOver } = getDynamicContextData();
 
-    // 10회 기준 최다 출현수
     const counts10 = {};
     for (let i = 1; i <= 45; i++) counts10[i] = 0;
     for (let r = latestRound; r > Math.max(0, latestRound - 10); r--) {
@@ -1614,7 +1652,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 3] 저장한 번호 목록 모달 (전체화면 적용 - 하단 메인화면 노출 완벽 차단) */}
+      {/* [모달 3] 저장한 번호 목록 모달 (전체화면) */}
       <Modal
         visible={isSavedModalVisible}
         animationType="slide"
@@ -1863,7 +1901,7 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* [탭 1] 번호 수동 제외 및 과열수 필터링 버튼 패널 */}
+            {/* [탭 1] 번호 수동 제외 및 과열수/미출현수 필터링 버튼 패널 */}
             {excludePopupTab === 'NUMBERS' ? (
               <>
                 <View style={styles.excludeCountBar}>
@@ -1883,47 +1921,71 @@ export default function App() {
                 </View>
 
                 <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 480 }}>
-                  {/* [신규 기능] 최근 포함 기준 4단계 극과열수 제외 등록 버튼 패널 */}
+                  {/* [수정 기능] 최근 포함 기준 4단계 과열수 & 20주/30주 미출현 번호 제외 패널 */}
                   <View style={styles.overheatedSectionBox}>
                     <Text style={styles.overheatedSectionTitle}>
-                      🔥 최근 포함 기준 과열 출현 번호 (터치 시 제외수에 등록):
+                      🔥 최근 포함 기준 과열 출현 번호 (터치 시 제외 등록):
                     </Text>
 
                     <View style={styles.overheatedButtonsGrid}>
                       <TouchableOpacity
                         style={styles.overheatedBtn}
-                        onPress={() => handleAddOverheatedToExclude(5, 4, '최근 5주간 4회 이상')}
+                        onPress={() => handleAddOverheatedToExclude(5, 3, '최근 5주간 3회 이상')}
                         activeOpacity={0.75}
                       >
-                        <Text style={styles.overheatedBtnTitle}>5주 4회↑ 출현</Text>
-                        <Text style={styles.overheatedBtnSub}>초단기 극과열 번호</Text>
+                        <Text style={styles.overheatedBtnTitle}>5주 3회↑ 출현</Text>
+                        <Text style={styles.overheatedBtnSub}>초단기 과열 번호</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
                         style={styles.overheatedBtn}
-                        onPress={() => handleAddOverheatedToExclude(10, 5, '최근 10주간 5회 이상')}
+                        onPress={() => handleAddOverheatedToExclude(10, 4, '최근 10주간 4회 이상')}
                         activeOpacity={0.75}
                       >
-                        <Text style={styles.overheatedBtnTitle}>10주 5회↑ 출현</Text>
+                        <Text style={styles.overheatedBtnTitle}>10주 4회↑ 출현</Text>
                         <Text style={styles.overheatedBtnSub}>단기 과열 번호</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
                         style={styles.overheatedBtn}
-                        onPress={() => handleAddOverheatedToExclude(15, 7, '최근 15주간 7회 이상')}
+                        onPress={() => handleAddOverheatedToExclude(15, 6, '최근 15주간 6회 이상')}
                         activeOpacity={0.75}
                       >
-                        <Text style={styles.overheatedBtnTitle}>15주 7회↑ 출현</Text>
+                        <Text style={styles.overheatedBtnTitle}>15주 6회↑ 출현</Text>
                         <Text style={styles.overheatedBtnSub}>중기 과밀 번호</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
                         style={styles.overheatedBtn}
-                        onPress={() => handleAddOverheatedToExclude(20, 8, '최근 20주간 8회 이상')}
+                        onPress={() => handleAddOverheatedToExclude(20, 7, '최근 20주간 7회 이상')}
                         activeOpacity={0.75}
                       >
-                        <Text style={styles.overheatedBtnTitle}>20주 8회↑ 출현</Text>
+                        <Text style={styles.overheatedBtnTitle}>20주 7회↑ 출현</Text>
                         <Text style={styles.overheatedBtnSub}>장기 과열 번호</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* [신규 추가] 20주 미출현 & 30주 미출현 번호 제외 버튼 행 */}
+                    <Text style={[styles.overheatedSectionTitle, { marginTop: 10, color: '#1e3a8a' }]}>
+                      ❄️ 장기 미출현 번호 (터치 시 제외 등록):
+                    </Text>
+                    <View style={styles.coldButtonsGrid}>
+                      <TouchableOpacity
+                        style={styles.coldBtn}
+                        onPress={() => handleAddColdToExclude(20, '최근 20주간 미출현')}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.coldBtnTitle}>❄️ 20주간 미출현 번호 제외</Text>
+                        <Text style={styles.coldBtnSub}>장기 콜드 번호군</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.coldBtn}
+                        onPress={() => handleAddColdToExclude(30, '최근 30주간 미출현')}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.coldBtnTitle}>🧊 30주간 미출현 번호 제외</Text>
+                        <Text style={styles.coldBtnSub}>초장기 냉각 번호군</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -2080,7 +2142,7 @@ export default function App() {
                     onPress={() => setExcludedNumbers([])}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.btnTextWhiteBold}>전체해제</Text>
+                    <Text style={styles.btnTextWhiteBold}>제외해제</Text>
                   </TouchableOpacity>
                 </View>
               </>
@@ -3451,7 +3513,9 @@ const styles = StyleSheet.create({
     color: '#1e293b',
   },
   excludeCloseTouch: {
-    paddingHorizontal: 12,
+    position: 'absolute',
+    right: 14,
+    padding: 4,
   },
   excludeCloseX: {
     fontSize: 20,
@@ -3496,7 +3560,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 
-  // [신규] 최근 포함 4단계 과열수 패널 스타일
+  // 과열수 패널
   overheatedSectionBox: {
     backgroundColor: '#fff1f2',
     marginHorizontal: 10,
@@ -3535,6 +3599,33 @@ const styles = StyleSheet.create({
   overheatedBtnSub: {
     fontSize: 9,
     color: '#fb7185',
+    marginTop: 2,
+    fontWeight: '700',
+  },
+
+  // 콜드수 패널
+  coldButtonsGrid: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  coldBtn: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#3b82f6',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+  },
+  coldBtnTitle: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#1d4ed8',
+  },
+  coldBtnSub: {
+    fontSize: 9,
+    color: '#60a5fa',
     marginTop: 2,
     fontWeight: '700',
   },
