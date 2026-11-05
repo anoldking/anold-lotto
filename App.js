@@ -78,12 +78,16 @@ const getBallColor = (number) => {
   return '#22c55e';
 };
 
-// 제외수를 반영한 번호 생성기
+// 1을 포함한 소수 집합 정의 (1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43)
+const PRIME_SET_WITH_ONE = new Set([1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43]);
+// 쌍둥이수 집합 (11, 22, 33, 44)
+const TWIN_NUMBERS = new Set([11, 22, 33, 44]);
+
+// 제외수를 반영한 번호 풀 추출
 const generateBasicLottoSet = (excludedNumbers = []) => {
   const pool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
     (n) => !excludedNumbers.includes(n)
   );
-
   if (pool.length < 6) return [];
 
   const selected = new Set();
@@ -96,33 +100,10 @@ const generateBasicLottoSet = (excludedNumbers = []) => {
 };
 
 // =================================================================
-// 통계 정밀 필터링 유틸 (총합 / 홀짝 / 연속쌍 / 끝수 / AC값 / 2연속이월제외 / 가로·세로멸구간)
+// [20대 정밀 필터링 연산 유틸]
 // =================================================================
 
-const isValidConsecutiveFilter = (sorted) => {
-  let consecutivePairCount = 0;
-  for (let i = 0; i < sorted.length - 1; i++) {
-    if (sorted[i + 1] - sorted[i] === 1) {
-      if (i < sorted.length - 2 && sorted[i + 2] - sorted[i + 1] === 1) {
-        return false;
-      }
-      consecutivePairCount++;
-      i++;
-    }
-  }
-  return consecutivePairCount <= 1;
-};
-
-const isValidLastDigitFilter = (numbers) => {
-  const counts = {};
-  for (const n of numbers) {
-    const digit = n % 10;
-    counts[digit] = (counts[digit] || 0) + 1;
-    if (counts[digit] >= 3) return false;
-  }
-  return true;
-};
-
+// AC값 계산 (산술적 복잡도)
 const calculateACValue = (sorted) => {
   const diffs = new Set();
   for (let i = 0; i < sorted.length; i++) {
@@ -133,6 +114,7 @@ const calculateACValue = (sorted) => {
   return diffs.size - (sorted.length - 1);
 };
 
+// 7x7 용지 마킹 패턴 계산
 const getPaperDeadPattern = (numbers) => {
   const rowCounts = [0, 0, 0, 0, 0, 0, 0];
   const colCounts = [0, 0, 0, 0, 0, 0, 0];
@@ -150,27 +132,130 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-const hasDoubleConsecutiveCarryOver = (candidate, doubleCarryOverNumbers = []) => {
-  if (!doubleCarryOverNumbers || doubleCarryOverNumbers.length === 0) return false;
-  return candidate.some((n) => doubleCarryOverNumbers.includes(n));
-};
+// 20대 핵심 조건 통합 판별기
+const isStrictStatisticallyValid = (numbers, dynamicContext) => {
+  const sorted = [...numbers].sort((a, b) => a - b);
+  const minNum = sorted[0];
+  const maxNum = sorted[5];
 
-const isStrictStatisticallyValid = (numbers, doubleCarryOverNumbers = []) => {
-  const sum = numbers.reduce((acc, cur) => acc + cur, 0);
-  if (sum < 115 || sum >= 180) return false;
+  // 1. 시작수 1~15 이하 & 끝수 30~45 이상
+  if (minNum > 15 || maxNum < 30) return false;
 
-  const oddCount = numbers.filter((n) => n % 2 !== 0).length;
-  if (oddCount === 0 || oddCount === 6) return false;
+  // 2. 최소-최대 고저차 (25 ~ 44 사이)
+  const range = maxNum - minNum;
+  if (range < 25 || range > 44) return false;
 
-  if (!isValidConsecutiveFilter(numbers)) return false;
-  if (!isValidLastDigitFilter(numbers)) return false;
-  if (calculateACValue(numbers) <= 6) return false;
+  // 3. 인접한 수들의 가장 큰 차이값 (6 ~ 20 사이, 21 이상 차단)
+  let maxAdjacentDiff = 0;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const diff = sorted[i + 1] - sorted[i];
+    if (diff > maxAdjacentDiff) maxAdjacentDiff = diff;
+  }
+  if (maxAdjacentDiff < 6 || maxAdjacentDiff > 20) return false;
 
-  if (hasDoubleConsecutiveCarryOver(numbers, doubleCarryOverNumbers)) return false;
+  // 4. 번호 총합 (100 ~ 180 사이)
+  const sum = sorted.reduce((acc, cur) => acc + cur, 0);
+  if (sum < 100 || sum > 180) return false;
 
-  const { deadRows, deadCols } = getPaperDeadPattern(numbers);
+  // 5. 홀짝 비율 (2:4, 3:3, 4:2)
+  const oddCount = sorted.filter((n) => n % 2 !== 0).length;
+  if (oddCount < 2 || oddCount > 4) return false;
+
+  // 6. 고저 비율 (22 이하: 저, 23 이상: 고 -> 2:4, 3:3, 4:2)
+  const lowCount = sorted.filter((n) => n <= 22).length;
+  if (lowCount < 2 || lowCount > 4) return false;
+
+  // 7. AC값 (7 ~ 10 사이)
+  const ac = calculateACValue(sorted);
+  if (ac < 7 || ac > 10) return false;
+
+  // 8. 소수(1 포함) 1~2개 허용, 나머지 합성수
+  const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
+  if (primeCount < 1 || primeCount > 2) return false;
+
+  // 9. 3의 배수 (1 ~ 3개 허용)
+  const mult3Count = sorted.filter((n) => n % 3 === 0).length;
+  if (mult3Count < 1 || mult3Count > 3) return false;
+
+  // 10. 5의 배수 (최대 1개 허용, 2개 이상 차단)
+  const mult5Count = sorted.filter((n) => n % 5 === 0).length;
+  if (mult5Count >= 2) return false;
+
+  // 11. 쌍둥이수 (최대 1개 허용, 2개 이상 차단)
+  const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
+  if (twinCount >= 2) return false;
+
+  // 12. 동일 끝수 3개 이상 차단 (최대 2개까지만 허용)
+  const lastDigitCounts = {};
+  for (const n of sorted) {
+    const d = n % 10;
+    lastDigitCounts[d] = (lastDigitCounts[d] || 0) + 1;
+    if (lastDigitCounts[d] >= 3) return false;
+  }
+
+  // 13. 연속번호(3연번 차단 & 2연번은 최대 1쌍만 허용)
+  let consecutivePairs = 0;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    if (sorted[i + 1] - sorted[i] === 1) {
+      if (i < sorted.length - 2 && sorted[i + 2] - sorted[i + 1] === 1) {
+        return false; // 3연번 차단
+      }
+      consecutivePairs++;
+      i++;
+    }
+  }
+  if (consecutivePairs > 1) return false;
+
+  // 14. 10단위 5개 구간(단번/10번/20번/30번/40번) 멸 개수 (1 ~ 2개 구간 전멸)
+  const sectionCounts = [0, 0, 0, 0, 0]; // 1~9, 10~19, 20~29, 30~39, 40~45
+  sorted.forEach((n) => {
+    if (n <= 9) sectionCounts[0]++;
+    else if (n <= 19) sectionCounts[1]++;
+    else if (n <= 29) sectionCounts[2]++;
+    else if (n <= 39) sectionCounts[3]++;
+    else sectionCounts[4]++;
+  });
+  const deadSections = sectionCounts.filter((cnt) => cnt === 0).length;
+  if (deadSections < 1 || deadSections > 2) return false;
+
+  // 15. 용지 마킹 패턴 (가로 멸 2~4개 & 세로 멸 2~4개)
+  const { deadRows, deadCols } = getPaperDeadPattern(sorted);
   if (deadRows < 2 || deadRows > 4) return false;
   if (deadCols < 2 || deadCols > 4) return false;
+
+  // 동적 통계 데이터 검증
+  if (dynamicContext) {
+    const { round1Numbers, doubleCarryOver, hot5w3, hot10w4, hot20w5, cold20w } = dynamicContext;
+
+    // 16. 이월수 2개 이상 차단 (직전 회차 번호는 최대 1개만 허용)
+    if (round1Numbers && round1Numbers.length > 0) {
+      const carryCount = sorted.filter((n) => round1Numbers.includes(n)).length;
+      if (carryCount >= 2) return false;
+    }
+
+    // 17. 2주 연속 이월수 차단 (직전 + 2주전 연속 출현 번호)
+    if (doubleCarryOver && doubleCarryOver.length > 0) {
+      if (sorted.some((n) => doubleCarryOver.includes(n))) return false;
+    }
+
+    // 18. 5주간 3회 이상 출현 과열수 차단
+    if (hot5w3 && hot5w3.length > 0) {
+      if (sorted.some((n) => hot5w3.includes(n))) return false;
+    }
+
+    // 19. 10주간 4회 이상 과열수 차단
+    if (hot10w4 && hot10w4.length > 0) {
+      if (sorted.some((n) => hot10w4.includes(n))) return false;
+    }
+
+    // 20. 20주간 5회 이상 과열수 차단 & 20주간 미출현(콜드수) 차단
+    if (hot20w5 && hot20w5.length > 0) {
+      if (sorted.some((n) => hot20w5.includes(n))) return false;
+    }
+    if (cold20w && cold20w.length > 0) {
+      if (sorted.some((n) => cold20w.includes(n))) return false;
+    }
+  }
 
   return true;
 };
@@ -224,12 +309,12 @@ export default function App() {
   const [generationTitle, setGenerationTitle] = useState('🎉 번호 추첨 완료');
   const [activeGenOption, setActiveGenOption] = useState('OPT_STRICT');
 
-  // 제외수 상태 (고정수 삭제 완료)
+  // 제외수 전용 상태
   const [excludedNumbers, setExcludedNumbers] = useState([]);
   const [includeBonusInExclude, setIncludeBonusInExclude] = useState(false);
   const [excludeAnalysisRounds, setExcludeAnalysisRounds] = useState(10);
 
-  // 용지 마킹 패턴표 옵션 토글 상태: [🔴 이번주], [🔵 1주 전], [🟢 2주 전]
+  // 용지 마킹 패턴표 토글: [🔴 이번주], [🔵 1주 전], [🟢 2주 전]
   const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
   const [showPattern1WeekAgo, setShowPattern1WeekAgo] = useState(false);
   const [showPattern2WeeksAgo, setShowPattern2WeeksAgo] = useState(false);
@@ -400,94 +485,78 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
-  const getRecent3WeeksCarryOverData = useCallback(() => {
+  // 동적 통계 데이터 컨텍스트 생성 (과열수/미출현수/연속이월수 추출)
+  const getDynamicContextData = useCallback(() => {
     const round1 = getLottoNumbersByRound(latestRound);
     const round2 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1) : null;
-    const round3 = latestRound > 2 ? getLottoNumbersByRound(latestRound - 2) : null;
 
     const list1 = round1 && !round1.isPending ? round1.numbers : [];
     const list2 = round2 && !round2.isPending ? round2.numbers : [];
-    const list3 = round3 && !round3.isPending ? round3.numbers : [];
 
     const doubleCarryOver = list1.filter((n) => list2.includes(n));
 
-    return {
-      round1Numbers: list1,
-      round2Numbers: list2,
-      round3Numbers: list3,
-      doubleCarryOver,
-    };
-  }, [latestRound, getLottoNumbersByRound]);
-
-  const hasRank4AtLeastOnce = useCallback(
-    (candidateNumbers) => {
-      const candSet = new Set(candidateNumbers);
-      for (let r = 1; r <= latestRound; r++) {
-        const roundData = getLottoNumbersByRound(r);
-        if (!roundData || !roundData.numbers || roundData.isPending) continue;
-
-        let matchCount = 0;
-        for (const n of roundData.numbers) {
-          if (candSet.has(n)) matchCount++;
-        }
-        if (matchCount === 4) return true;
-      }
-      return false;
-    },
-    [latestRound, getLottoNumbersByRound]
-  );
-
-  // 통계 정밀 필터 (연속 2회 이상 이월수 제외 + 가로멸 2~4개 / 세로멸 2~4개 패턴)
-  const generateStrictFilteredSet = useCallback(
-    (excluded = []) => {
-      const { doubleCarryOver } = getRecent3WeeksCarryOverData();
-
-      let attempts = 0;
-      while (attempts < 6000) {
-        attempts++;
-        const candidate = generateBasicLottoSet(excluded);
-        if (candidate.length < 6) return [];
-
-        if (isStrictStatisticallyValid(candidate, doubleCarryOver)) {
-          if (hasRank4AtLeastOnce(candidate)) {
-            return candidate;
-          }
-        }
-      }
-
-      attempts = 0;
-      while (attempts < 3000) {
-        attempts++;
-        const candidate = generateBasicLottoSet(excluded);
-        if (candidate.length < 6) return [];
-        if (isStrictStatisticallyValid(candidate, doubleCarryOver)) {
-          return candidate;
-        }
-      }
-      return generateBasicLottoSet(excluded);
-    },
-    [getRecent3WeeksCarryOverData, hasRank4AtLeastOnce]
-  );
-
-  // ================= [4단계 제외수 공식 유틸리티] =================
-  const getExcludeAnalysisData = useCallback(() => {
-    // 1단계: 2연속 이월수
-    const { round1Numbers, round2Numbers, doubleCarryOver } = getRecent3WeeksCarryOverData();
-
-    // 2단계: 최근 10회 최다 출현 과열수 (4회 이상 출현)
+    // 최근 5주, 10주, 20주 빈도 계산
+    const counts5 = {};
     const counts10 = {};
-    for (let i = 1; i <= 45; i++) counts10[i] = 0;
-    for (let r = latestRound; r > Math.max(0, latestRound - 10); r--) {
+    const counts20 = {};
+    for (let i = 1; i <= 45; i++) {
+      counts5[i] = 0;
+      counts10[i] = 0;
+      counts20[i] = 0;
+    }
+
+    for (let r = latestRound; r > Math.max(0, latestRound - 20); r--) {
       const rData = getLottoNumbersByRound(r);
       if (rData && rData.numbers && !rData.isPending) {
-        rData.numbers.forEach((n) => {
-          counts10[n] = (counts10[n] || 0) + 1;
+        const diffR = latestRound - r;
+        rData.numbers.forEach((num) => {
+          if (diffR < 5) counts5[num]++;
+          if (diffR < 10) counts10[num]++;
+          if (diffR < 20) counts20[num]++;
         });
       }
     }
-    const hotNumbers = Object.entries(counts10)
-      .filter(([_, cnt]) => cnt >= 4)
-      .map(([n]) => Number(n));
+
+    const hot5w3 = Object.entries(counts5).filter(([_, c]) => c >= 3).map(([n]) => Number(n));
+    const hot10w4 = Object.entries(counts10).filter(([_, c]) => c >= 4).map(([n]) => Number(n));
+    const hot20w5 = Object.entries(counts20).filter(([_, c]) => c >= 5).map(([n]) => Number(n));
+    const cold20w = Object.entries(counts20).filter(([_, c]) => c === 0).map(([n]) => Number(n));
+
+    return {
+      round1Numbers: list1,
+      doubleCarryOver,
+      hot5w3,
+      hot10w4,
+      hot20w5,
+      cold20w,
+    };
+  }, [latestRound, getLottoNumbersByRound]);
+
+  // 20대 조건 완벽 적용 5세트 생성기
+  const generateStrictFilteredSet = useCallback(
+    (excluded = []) => {
+      const dynamicContext = getDynamicContextData();
+
+      let attempts = 0;
+      while (attempts < 15000) {
+        attempts++;
+        const candidate = generateBasicLottoSet(excluded);
+        if (candidate.length < 6) return [];
+
+        if (isStrictStatisticallyValid(candidate, dynamicContext)) {
+          return candidate;
+        }
+      }
+
+      // 15,000회 내 미충족 시 기본 조건으로 폴백
+      return generateBasicLottoSet(excluded);
+    },
+    [getDynamicContextData]
+  );
+
+  // 제외수 4단계 추천 추출
+  const getExcludeAnalysisData = useCallback(() => {
+    const { round1Numbers, doubleCarryOver, hot10w4 } = getDynamicContextData();
 
     // 3단계: 직전 회차 2개 이상 겹친 끝수 그룹의 번호들
     const lastDigitsCount = {};
@@ -500,7 +569,7 @@ export default function App() {
       .map(([d]) => Number(d));
     const crowdedDigitNumbers = allNumbers.filter((n) => crowdedDigits.includes(n % 10));
 
-    // 4단계: 직전 회차 2~3개 이상 몰렸던 가로행 및 세로열 번호들
+    // 4단계: 직전 회차 2개 이상 몰렸던 가로행 및 세로열 번호들
     const rowCounts = [0, 0, 0, 0, 0, 0, 0];
     const colCounts = [0, 0, 0, 0, 0, 0, 0];
     round1Numbers.forEach((n) => {
@@ -521,13 +590,12 @@ export default function App() {
 
     return {
       step1DoubleCarry: doubleCarryOver,
-      step2HotNumbers: hotNumbers,
+      step2HotNumbers: hot10w4,
       step3CrowdedDigitNumbers: crowdedDigitNumbers,
       step4CrowdedLineNumbers: crowdedLineNumbers,
     };
-  }, [latestRound, getRecent3WeeksCarryOverData, getLottoNumbersByRound, allNumbers]);
+  }, [getDynamicContextData, allNumbers]);
 
-  // 스마트 12개 정밀 제외수 일괄 생성 및 적용
   const applySmart12ExcludeSet = () => {
     const {
       step1DoubleCarry,
@@ -537,66 +605,15 @@ export default function App() {
     } = getExcludeAnalysisData();
 
     const excludeSet = new Set();
-
-    // 1. 2연속 이월수 우선 추가
     step1DoubleCarry.forEach((n) => excludeSet.add(n));
-
-    // 2. 최근 10회 과열수 추가
-    step2HotNumbers.forEach((n) => {
-      if (excludeSet.size < 4) excludeSet.add(n);
-    });
-
-    // 3. 직전 끝수 과밀 번호 추가
-    step3CrowdedDigitNumbers.forEach((n) => {
-      if (excludeSet.size < 7) excludeSet.add(n);
-    });
-
-    // 4. 용지 과밀 라인의 번호들 추가하여 12개 안팎으로 채움
-    step4CrowdedLineNumbers.forEach((n) => {
-      if (excludeSet.size < 12) excludeSet.add(n);
-    });
-
-    // 부족할 경우 미출현수에서 보충
-    if (excludeSet.size < 12) {
-      const freq = getExcludeFrequencyData();
-      freq.leastList.forEach((item) => {
-        if (excludeSet.size < 12) excludeSet.add(item.num);
-      });
-    }
+    step2HotNumbers.forEach((n) => { if (excludeSet.size < 4) excludeSet.add(n); });
+    step3CrowdedDigitNumbers.forEach((n) => { if (excludeSet.size < 7) excludeSet.add(n); });
+    step4CrowdedLineNumbers.forEach((n) => { if (excludeSet.size < 12) excludeSet.add(n); });
 
     const finalResult = Array.from(excludeSet).sort((a, b) => a - b);
     setExcludedNumbers(finalResult);
-    Alert.alert('스마트 12개 제외수 적용 완료', `통계 4대 공식을 기반으로 총 ${finalResult.length}개의 추천 제외수가 설정되었습니다.\n\n제외 번호: ${finalResult.join(', ')}`);
+    Alert.alert('스마트 추천 제외수 적용', `총 ${finalResult.length}개 추천 번호가 제외수로 설정되었습니다.\n\n번호: ${finalResult.join(', ')}`);
   };
-
-  const getExcludeFrequencyData = useCallback(() => {
-    const counts = {};
-    for (let i = 1; i <= 45; i++) counts[i] = 0;
-
-    for (let r = latestRound; r > Math.max(0, latestRound - excludeAnalysisRounds); r--) {
-      const roundData = getLottoNumbersByRound(r);
-      if (roundData && roundData.numbers && !roundData.isPending) {
-        roundData.numbers.forEach((num) => {
-          counts[num] = (counts[num] || 0) + 1;
-        });
-        if (includeBonusInExclude && roundData.bnusNo) {
-          counts[roundData.bnusNo] = (counts[roundData.bnusNo] || 0) + 1;
-        }
-      }
-    }
-
-    const sortedList = Object.entries(counts)
-      .map(([num, count]) => ({ num: Number(num), count }))
-      .sort((a, b) => b.count - a.count);
-
-    const mostList = sortedList.slice(0, 5);
-    const leastList = sortedList.slice(-5).reverse();
-    const nonAppearedList = sortedList.filter((item) => item.count === 0).map((item) => item.num);
-
-    return { counts, mostList, leastList, nonAppearedList };
-  }, [latestRound, excludeAnalysisRounds, includeBonusInExclude, getLottoNumbersByRound]);
-
-  const { mostList, leastList } = getExcludeFrequencyData();
 
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
@@ -683,7 +700,6 @@ export default function App() {
       }
 
       const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 3);
-
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
       const targetBaseRound = sourceType === 'WINNING' ? baseRound : latestRound;
@@ -798,7 +814,6 @@ export default function App() {
   const handleInvertExcludeNumbers = () => {
     const all = Array.from({ length: 45 }, (_, i) => i + 1);
     const inverted = all.filter((n) => !excludedNumbers.includes(n));
-
     if (inverted.length > 39) {
       Alert.alert('반전 불가', '최소 6개의 번호는 남아있어야 합니다.');
       return;
@@ -837,7 +852,7 @@ export default function App() {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       setSavedSets(updated);
       setIsManualModalVisible(false);
-      Alert.alert('등록 완료', '직접 선택한 6개 번호가 저장함에 보관되었습니다.', [
+      Alert.alert('등록 완료', '선택한 6개 번호가 저장함에 보관되었습니다.', [
         { text: '확인', onPress: () => setIsSavedModalVisible(true) },
       ]);
     } catch (e) {
@@ -862,7 +877,7 @@ export default function App() {
         const updated = { ...lottoCache, [fetched.drwNo]: { ...fetched, isPending: false } };
         setLottoCache(updated);
         await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
-        Alert.alert('동기화 완료', `제 ${fetched.drwNo}회 당첨번호가 성공적으로 반영되었습니다.`);
+        Alert.alert('동기화 완료', `제 ${fetched.drwNo}회 당첨번호가 반영되었습니다.`);
       } else {
         Alert.alert('안내', '최신 당첨번호를 확인했습니다.');
       }
@@ -1217,8 +1232,150 @@ export default function App() {
     }
   };
 
+  const handleGenerateWithOptions = useCallback(
+    (optionType) => {
+      const availableCount = 45 - excludedNumbers.length;
+      if (availableCount < 6) {
+        Alert.alert('알림', '제외수가 너무 많습니다. 최소 6개 이상의 후보 번호가 필요합니다.');
+        return;
+      }
+
+      setActiveGenOption(optionType);
+      let newGames = [];
+      let title = '';
+
+      if (optionType === 'NORMAL') {
+        newGames = Array.from({ length: 5 }, () => generateBasicLottoSet(excludedNumbers));
+        title = '🎲 기본 무작위 5세트 생성';
+      } else if (optionType === 'OPT_STRICT') {
+        newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers));
+        title = '📊 20대 정밀 필터링 5세트 생성';
+      }
+
+      setGames(newGames);
+      setGenerationTitle(title);
+      setIsGeneratedModalVisible(true);
+    },
+    [excludedNumbers, generateStrictFilteredSet]
+  );
+
+  const handleGenerateOpposite = () => {
+    if (savedSets.length === 0) {
+      Alert.alert('알림', '저장된 번호가 없습니다. 먼저 번호를 저장해주세요.');
+      return;
+    }
+
+    const savedNumbersSet = new Set();
+    savedSets.forEach((entry) => {
+      entry.games.forEach((g) => {
+        g.forEach((num) => savedNumbersSet.add(num));
+      });
+    });
+
+    const oppositePool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
+      (n) => !savedNumbersSet.has(n) && !excludedNumbers.includes(n)
+    );
+
+    if (oppositePool.length < 6) {
+      Alert.alert(
+        '반대번호 생성 불가',
+        `저장된 번호를 제외하고 남은 번호가 부족합니다. 최소 6개 이상이어야 합니다.`
+      );
+      return;
+    }
+
+    const newGames = Array.from({ length: 5 }, () => {
+      const selected = new Set();
+      const tempPool = [...oppositePool];
+      while (selected.size < 6 && tempPool.length > 0) {
+        const rIdx = Math.floor(Math.random() * tempPool.length);
+        selected.add(tempPool[rIdx]);
+        tempPool.splice(rIdx, 1);
+      }
+      return Array.from(selected).sort((a, b) => a - b);
+    });
+
+    setGames(newGames);
+    setGenerationTitle(`⚡ 반대번호 생성 (후보 ${oppositePool.length}개)`);
+    setIsSavedModalVisible(false);
+    setIsGeneratedModalVisible(true);
+  };
+
+  const handleSaveCurrentGames = async () => {
+    if (games.length === 0) return;
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(
+      now.getDate()
+    ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const newEntry = { id: Date.now().toString(), date: dateStr, games: games };
+    try {
+      const updated = [newEntry, ...savedSets];
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      setSavedSets(updated);
+      Alert.alert('저장 완료', '생성된 5세트 번호가 기기에 저장되었습니다.');
+    } catch (e) {
+      Alert.alert('저장 실패', '번호를 저장하는 중 문제가 발생했습니다.');
+    }
+  };
+
+  const handleDeleteSingleGame = (itemId, gameIdx) => {
+    Alert.alert('1게임 삭제', '선택하신 게임 번호를 삭제하시겠습니까?', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const updated = savedSets
+              .map((item) => {
+                if (item.id === itemId) {
+                  const remainingGames = item.games.filter((_, idx) => idx !== gameIdx);
+                  return { ...item, games: remainingGames };
+                }
+                return item;
+              })
+              .filter((item) => item.games.length > 0);
+
+            setSavedSets(updated);
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+          } catch (e) {
+            Alert.alert('삭제 오류', '게임을 삭제하는 중 문제가 발생했습니다.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleDeleteAllSavedSets = () => {
+    if (savedSets.length === 0) {
+      Alert.alert('알림', '삭제할 저장 번호가 없습니다.');
+      return;
+    }
+
+    Alert.alert(
+      '⚠️ 전체 삭제 확인',
+      '보관함에 저장된 모든 로또 번호를 완전히 삭제하시겠습니까?\n삭제된 번호는 복구할 수 없습니다.',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '모두 삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setSavedSets([]);
+              await AsyncStorage.removeItem(STORAGE_KEY);
+              Alert.alert('삭제 완료', '모든 저장 번호가 깨끗이 삭제되었습니다.');
+            } catch (e) {
+              Alert.alert('오류', '전체 삭제 중 문제가 발생했습니다.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const latestWinningInfo = getLottoNumbersByRound(latestRound);
-  const recent3WeeksData = getRecent3WeeksCarryOverData();
+  const recent3WeeksData = getDynamicContextData();
 
   return (
     <View style={styles.fullScreenContainer}>
@@ -1294,8 +1451,8 @@ export default function App() {
                 <Text style={styles.modalTitle}>{generationTitle}</Text>
                 <Text style={styles.modalSubtitle}>
                   {activeGenOption === 'OPT_STRICT'
-                    ? '합 115~179 · AC≥7 · 4등1회↑ · 2연속이월제외 · 멸구간 2~4개'
-                    : '제외수 반영 무작위 추출'}
+                    ? 'AC 7~10 · 합100~180 · 소수1~2 · 2연속이월제외 · 멸구간 2~4'
+                    : '제외수 반영 무작위 6개 추출'}
                 </Text>
               </View>
               <TouchableOpacity onPress={() => setIsGeneratedModalVisible(false)} style={styles.closeBtn}>
@@ -1341,8 +1498,8 @@ export default function App() {
                 onPress={() => handleGenerateWithOptions('OPT_STRICT')}
                 activeOpacity={0.85}
               >
-                <Text style={styles.bottomOptionBtnTitle}>📊 통계 정밀 필터</Text>
-                <Text style={styles.bottomOptionBtnSub}>(4등 1회↑·2연속이월제외·멸2~4)</Text>
+                <Text style={styles.bottomOptionBtnTitle}>📊 20대 정밀 필터링</Text>
+                <Text style={styles.bottomOptionBtnSub}>(AC·합계·소수·이월·멸패턴 완벽적용)</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1351,7 +1508,7 @@ export default function App() {
                 activeOpacity={0.85}
               >
                 <Text style={styles.bottomOptionBtnTitle}>🎲 기본추첨</Text>
-                <Text style={styles.bottomOptionBtnSub}>(5세트 생성)</Text>
+                <Text style={styles.bottomOptionBtnSub}>(5세트 무작위 생성)</Text>
               </TouchableOpacity>
             </View>
 
@@ -1581,7 +1738,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 4] 4단계 공식 기반 스마트 제외수 설정 모달 (고정수 삭제 완료) */}
+      {/* [모달 4] 스마트 제외수 전용 설정 모달 */}
       <Modal
         visible={isExcludeModalVisible}
         animationType="fade"
@@ -1590,7 +1747,6 @@ export default function App() {
       >
         <View style={styles.centerModalOverlay}>
           <View style={styles.excludePopupBox}>
-            {/* 상단 헤더 */}
             <View style={styles.excludeHeaderBox}>
               <Text style={styles.excludeHeaderTitle}>🚫 제외수 설정</Text>
               <TouchableOpacity
@@ -1602,7 +1758,6 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* 제외수 카운터 바 */}
             <View style={styles.excludeCountBar}>
               <Text style={styles.excludeCountText}>
                 설정된 제외수: <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (권장: 10~15개 / 최대: 39개)
@@ -1620,13 +1775,12 @@ export default function App() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 490 }}>
-              {/* [4단계 공식 스마트 원터치 제외 컨트롤 패널] */}
+              {/* 4단계 공식 기반 스마트 원터치 제외 컨트롤 패널 */}
               <View style={styles.smartFormulaPanel}>
                 <View style={styles.smartFormulaHeaderRow}>
                   <Text style={styles.smartFormulaTitle}>🎯 통계 공식 기반 추천 제외수 원터치 적용</Text>
                 </View>
 
-                {/* 1. 최강 추천: 12개 정밀 제외수 자동 적용 버튼 */}
                 <TouchableOpacity
                   style={styles.smartAuto12Btn}
                   onPress={applySmart12ExcludeSet}
@@ -1638,15 +1792,13 @@ export default function App() {
                   </Text>
                 </TouchableOpacity>
 
-                {/* 개별 4단계 필터 버튼 그리드 */}
                 <View style={styles.formulaStepGrid}>
-                  {/* 1단계: 2연속 이월수 */}
                   <TouchableOpacity
                     style={styles.formulaStepBtn}
                     onPress={() => {
                       const { step1DoubleCarry } = getExcludeAnalysisData();
                       if (step1DoubleCarry.length === 0) {
-                        Alert.alert('알림', '최근 직전 회차와 2주 전 연속 출현한 번호가 없습니다.');
+                        Alert.alert('알림', '직전 회차와 2주 전 연속 출현한 번호가 없습니다.');
                         return;
                       }
                       const merged = Array.from(new Set([...excludedNumbers, ...step1DoubleCarry])).sort((a, b) => a - b);
@@ -1661,7 +1813,6 @@ export default function App() {
                     </Text>
                   </TouchableOpacity>
 
-                  {/* 2단계: 최근 10회 과열수 */}
                   <TouchableOpacity
                     style={styles.formulaStepBtn}
                     onPress={() => {
@@ -1680,7 +1831,6 @@ export default function App() {
                     <Text style={styles.formulaStepBtnSub}>(4회 이상 출현수)</Text>
                   </TouchableOpacity>
 
-                  {/* 3단계: 직전 끝수 과밀 */}
                   <TouchableOpacity
                     style={styles.formulaStepBtn}
                     onPress={() => {
@@ -1699,7 +1849,6 @@ export default function App() {
                     <Text style={styles.formulaStepBtnSub}>(동일 끝수 쏠림)</Text>
                   </TouchableOpacity>
 
-                  {/* 4단계: 용지 과밀 라인 */}
                   <TouchableOpacity
                     style={styles.formulaStepBtn}
                     onPress={() => {
@@ -1720,7 +1869,7 @@ export default function App() {
                 </View>
               </View>
 
-              {/* 기본 빠른 제외수 및 출현 통계 */}
+              {/* 기본 빠른 제외 버튼 */}
               <View style={styles.quickExcludeRow}>
                 <TouchableOpacity
                   style={styles.quickExcludeBtn}
@@ -1757,72 +1906,6 @@ export default function App() {
                 >
                   <Text style={styles.quickExcludeBtnText}>🚫 최근 2회차 번호 제외</Text>
                 </TouchableOpacity>
-              </View>
-
-              <View style={styles.statsPanel}>
-                <View style={styles.statsPanelHeader}>
-                  <Text style={styles.statsPanelTitle}>🔥 최다 출현 번호 (터치 시 제외/해제):</Text>
-                </View>
-                <View style={styles.statsBallsRow}>
-                  {mostList.map((item) => {
-                    const isEx = excludedNumbers.includes(item.num);
-                    return (
-                      <TouchableOpacity
-                        key={`most-b-${item.num}`}
-                        style={styles.statBallItem}
-                        onPress={() => toggleExcludeNumber(item.num)}
-                        activeOpacity={0.7}
-                      >
-                        <View
-                          style={[
-                            styles.statBallMini,
-                            { backgroundColor: getBallColor(item.num) },
-                            isEx && styles.statBallMiniExcluded,
-                          ]}
-                        >
-                          <Text style={[styles.statBallMiniText, isEx && styles.statBallMiniTextExcluded]}>
-                            {item.num}
-                          </Text>
-                          {isEx && <Text style={styles.strikeMarkMini}>✕</Text>}
-                        </View>
-                        <Text style={styles.statCountBadge}>{item.count}회</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-
-              <View style={styles.statsPanel}>
-                <View style={styles.statsPanelHeader}>
-                  <Text style={styles.statsPanelTitle}>❄️ 최소 출현 번호 (터치 시 제외/해제):</Text>
-                </View>
-                <View style={styles.statsBallsRow}>
-                  {leastList.map((item) => {
-                    const isEx = excludedNumbers.includes(item.num);
-                    return (
-                      <TouchableOpacity
-                        key={`least-b-${item.num}`}
-                        style={styles.statBallItem}
-                        onPress={() => toggleExcludeNumber(item.num)}
-                        activeOpacity={0.7}
-                      >
-                        <View
-                          style={[
-                            styles.statBallMini,
-                            { backgroundColor: getBallColor(item.num) },
-                            isEx && styles.statBallMiniExcluded,
-                          ]}
-                        >
-                          <Text style={[styles.statBallMiniText, isEx && styles.statBallMiniTextExcluded]}>
-                            {item.num}
-                          </Text>
-                          {isEx && <Text style={styles.strikeMarkMini}>✕</Text>}
-                        </View>
-                        <Text style={styles.statCountBadge}>{item.count}회</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
               </View>
 
               {/* 1~45 전체 로또 볼 선택 영역 */}
@@ -2257,7 +2340,6 @@ export default function App() {
 
             {analysisTargetData && (
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
-                {/* 6개 번호 표시 바 */}
                 <View style={styles.analysisBallsCard}>
                   <View style={styles.analysisBallsRow}>
                     {analysisTargetData.numbers.map((n) => (
@@ -2276,7 +2358,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 로또 용지 마킹 패턴표 (7x7 SLIP) - 보너스 번호 삭제 & 이번주/1주전/2주전 마킹 토글 */}
+                {/* 로또 용지 마킹 패턴표 (7x7 SLIP) */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
@@ -2287,7 +2369,6 @@ export default function App() {
                     </Text>
                   </View>
 
-                  {/* [🔴 이번주], [🔵 1주 전], [🟢 2주 전] 마킹 표시 토글 버튼 바 */}
                   <View style={styles.patternToggleControlRow}>
                     <Text style={styles.patternToggleControlLabel}>주차 비교:</Text>
 
@@ -2322,7 +2403,6 @@ export default function App() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* 7x7 용지 그리드 (보너스 마킹은 완전 배제) */}
                   <View style={styles.slipGridBox}>
                     {Array.from({ length: 7 }, (_, rIdx) => (
                       <View key={`slip-row-${rIdx}`} style={styles.slipGridRow}>
@@ -2355,10 +2435,8 @@ export default function App() {
                                 {num}
                               </Text>
 
-                              {/* 순수 6개 번호 붉은 펜 마킹 효과 */}
                               {isHit && <View style={styles.slipCheckBar} />}
 
-                              {/* 이번주, 1주전, 2주전 주차별 닷 표시 */}
                               <View style={styles.overlayDotContainer}>
                                 {hitThisWeek && <View style={styles.overlayDotRed} />}
                                 {hit1WeekAgo && <View style={styles.overlayDotBlue} />}
@@ -2428,21 +2506,23 @@ export default function App() {
                     </Text>
                   </View>
                   <View style={styles.metricItemFull}>
-                    <Text style={styles.metricLabel}>AC값 (산술적 복잡도 ≥ 7)</Text>
+                    <Text style={styles.metricLabel}>AC값 (산술적 복잡도 7~10)</Text>
                     <Text
                       style={[
                         styles.metricValue,
                         {
                           color:
-                            calculateACValue(analysisTargetData.numbers) >= 7
+                            calculateACValue(analysisTargetData.numbers) >= 7 &&
+                            calculateACValue(analysisTargetData.numbers) <= 10
                               ? '#059669'
                               : '#dc2626',
                         },
                       ]}
                     >
                       AC {calculateACValue(analysisTargetData.numbers)} (
-                      {calculateACValue(analysisTargetData.numbers) >= 7
-                        ? '통계적 유효 범위'
+                      {calculateACValue(analysisTargetData.numbers) >= 7 &&
+                      calculateACValue(analysisTargetData.numbers) <= 10
+                        ? '황금 밸런스 유효 범위'
                         : '규칙성 높음/배제 대상'}
                       )
                     </Text>
@@ -3077,7 +3157,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 
-  // 4단계 공식 스마트 제외수 패널
+  // 스마트 제외수 컨트롤 패널
   smartFormulaPanel: {
     backgroundColor: '#f8fafc',
     marginHorizontal: 10,
@@ -3225,7 +3305,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // 로또 볼 그리드
   excludeBallWrapper: {
     flexDirection: 'row',
     flexWrap: 'wrap',
