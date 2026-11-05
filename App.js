@@ -128,7 +128,7 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 사용자가 설정한 12대 필터 ON/OFF를 반영한 통계 판별기
+// 번호 생성 검증 판별기 (과열수 조건은 제외수에서만 관리하도록 분리)
 const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLimit = 3) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
@@ -170,7 +170,7 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
     if (ac < 7 || ac > 10) return false;
   }
 
-  // 5. 소수 개수 필터 (소수 최대 출현수 maxPrimeLimit까지 허용: 기본 3개, 최대 4개)
+  // 5. 소수 개수 필터 (소수 1~maxPrimeLimit개)
   if (filters.usePrime) {
     const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
     if (primeCount < 1 || primeCount > maxPrimeLimit) return false;
@@ -240,9 +240,9 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
     if (deadCols < 2 || deadCols > 4) return false;
   }
 
-  // 이월수 및 과열수 동적 조건 검증
+  // 이월수 조건 검증
   if (dynamicContext) {
-    const { round1Numbers, doubleCarryOver, hot5w3, hot10w4, hot20w5, cold20w } = dynamicContext;
+    const { round1Numbers, doubleCarryOver } = dynamicContext;
 
     if (filters.useCarryOver && round1Numbers && round1Numbers.length > 0) {
       const carryCount = sorted.filter((n) => round1Numbers.includes(n)).length;
@@ -251,14 +251,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLi
 
     if (filters.useDoubleCarry && doubleCarryOver && doubleCarryOver.length > 0) {
       if (sorted.some((n) => doubleCarryOver.includes(n))) return false;
-    }
-
-    if (hot5w3 && hot5w3.length > 0 && sorted.some((n) => hot5w3.includes(n))) return false;
-    if (hot10w4 && hot10w4.length > 0 && sorted.some((n) => hot10w4.includes(n))) return false;
-    if (hot20w5 && hot20w5.length > 0 && sorted.some((n) => hot20w5.includes(n))) return false;
-    if (cold20w && cold20w.length > 0) {
-      const coldCount = sorted.filter((n) => cold20w.includes(n)).length;
-      if (coldCount >= 2) return false;
     }
   }
 
@@ -318,26 +310,25 @@ export default function App() {
   const [excludedNumbers, setExcludedNumbers] = useState([]);
   const [includeBonusInExclude, setIncludeBonusInExclude] = useState(false);
   const [excludeAnalysisRounds, setExcludeAnalysisRounds] = useState(10);
-  const [excludePopupTab, setExcludePopupTab] = useState('NUMBERS'); // 'NUMBERS' 또는 'FILTERS'
+  const [excludePopupTab, setExcludePopupTab] = useState('NUMBERS');
 
-  // [신규] 12대 필터 ON/OFF 직접 설정 상태
+  // 12대 필터 ON/OFF 상태
   const [filterSettings, setFilterSettings] = useState({
-    useAC: true,          // 1. AC값 7~10
-    useSum: true,         // 2. 총합 100~180
-    useOddEven: true,     // 3. 홀짝 비율
-    useHighLow: true,     // 4. 고저 비율
-    usePrime: true,       // 5. 소수 출현수 제어
-    useMult3: true,       // 6. 3의 배수(1~3개)
-    useMult5: true,       // 7. 5의 배수(최대 2개)
-    useCarryOver: true,   // 8. 직전 이월수(최대 1개)
-    useDoubleCarry: true, // 9. 2연속 이월 차단
-    useConsecutive: true, // 10. 연번 제어(3연번 차단)
-    useSameEnd: true,     // 11. 동일 끝수(3개이상 차단)
-    usePaperPattern: true,// 12. 용지 마킹 멸 패턴(가로/세로 2~4)
-    useSectionDead: true, // 보조. 10단위 1~2개 멸
+    useAC: true,
+    useSum: true,
+    useOddEven: true,
+    useHighLow: true,
+    usePrime: true,
+    useMult3: true,
+    useMult5: true,
+    useCarryOver: true,
+    useDoubleCarry: true,
+    useConsecutive: true,
+    useSameEnd: true,
+    usePaperPattern: true,
+    useSectionDead: true,
   });
 
-  // [신규] 소수 최대 출현수 설정 (기본 3개, 최대 4개까지 선택 가능)
   const [maxPrimeCount, setMaxPrimeCount] = useState(3);
 
   // 용지 마킹 패턴표 토글: [🔴 이번주], [🔵 1주 전], [🟢 2주 전]
@@ -520,43 +511,13 @@ export default function App() {
 
     const doubleCarryOver = list1.filter((n) => list2.includes(n));
 
-    const counts5 = {};
-    const counts10 = {};
-    const counts20 = {};
-    for (let i = 1; i <= 45; i++) {
-      counts5[i] = 0;
-      counts10[i] = 0;
-      counts20[i] = 0;
-    }
-
-    for (let r = latestRound; r > Math.max(0, latestRound - 20); r--) {
-      const rData = getLottoNumbersByRound(r);
-      if (rData && rData.numbers && !rData.isPending) {
-        const diffR = latestRound - r;
-        rData.numbers.forEach((num) => {
-          if (diffR < 5) counts5[num]++;
-          if (diffR < 10) counts10[num]++;
-          if (diffR < 20) counts20[num]++;
-        });
-      }
-    }
-
-    const hot5w3 = Object.entries(counts5).filter(([_, c]) => c >= 3).map(([n]) => Number(n));
-    const hot10w4 = Object.entries(counts10).filter(([_, c]) => c >= 4).map(([n]) => Number(n));
-    const hot20w5 = Object.entries(counts20).filter(([_, c]) => c >= 5).map(([n]) => Number(n));
-    const cold20w = Object.entries(counts20).filter(([_, c]) => c === 0).map(([n]) => Number(n));
-
     return {
       round1Numbers: list1,
       doubleCarryOver,
-      hot5w3,
-      hot10w4,
-      hot20w5,
-      cold20w,
     };
   }, [latestRound, getLottoNumbersByRound]);
 
-  // 설정된 필터 및 소수 최대 개수를 적용한 번호 생성기
+  // 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -584,8 +545,66 @@ export default function App() {
     }));
   };
 
+  // [신규] 최근 회차 포함 기준 N주간 M회 이상 출현한 과열수 계산 유틸
+  const getOverheatedNumbers = useCallback(
+    (weekCount, minOccurrences) => {
+      const counts = {};
+      for (let i = 1; i <= 45; i++) counts[i] = 0;
+
+      for (let r = latestRound; r > Math.max(0, latestRound - weekCount); r--) {
+        const rData = getLottoNumbersByRound(r);
+        if (rData && rData.numbers && !rData.isPending) {
+          rData.numbers.forEach((num) => {
+            counts[num]++;
+          });
+          if (includeBonusInExclude && rData.bnusNo) {
+            counts[rData.bnusNo]++;
+          }
+        }
+      }
+
+      return Object.entries(counts)
+        .filter(([_, cnt]) => cnt >= minOccurrences)
+        .map(([num]) => Number(num))
+        .sort((a, b) => a - b);
+    },
+    [latestRound, includeBonusInExclude, getLottoNumbersByRound]
+  );
+
+  // 과열수 번호를 제외수 목록에 추가하는 핸들러
+  const handleAddOverheatedToExclude = (weekCount, minOccurrences, label) => {
+    const matched = getOverheatedNumbers(weekCount, minOccurrences);
+    if (matched.length === 0) {
+      Alert.alert('알림', `${label} 조건에 해당하는 번호가 없습니다.`);
+      return;
+    }
+
+    const merged = Array.from(new Set([...excludedNumbers, ...matched])).sort((a, b) => a - b);
+    if (merged.length > 39) {
+      Alert.alert('알림', `제외수가 ${merged.length}개로 한도(39개)를 초과하여 추가할 수 없습니다.`);
+      return;
+    }
+
+    setExcludedNumbers(merged);
+    Alert.alert(
+      '제외수 등록 완료',
+      `${label} (${matched.length}개): [${matched.join(', ')}]\n\n제외수에 성공적으로 추가되었습니다.`
+    );
+  };
+
   const getExcludeAnalysisData = useCallback(() => {
-    const { round1Numbers, doubleCarryOver, hot10w4 } = getDynamicContextData();
+    const { round1Numbers, doubleCarryOver } = getDynamicContextData();
+
+    // 10회 기준 최다 출현수
+    const counts10 = {};
+    for (let i = 1; i <= 45; i++) counts10[i] = 0;
+    for (let r = latestRound; r > Math.max(0, latestRound - 10); r--) {
+      const rData = getLottoNumbersByRound(r);
+      if (rData && rData.numbers && !rData.isPending) {
+        rData.numbers.forEach((n) => { counts10[n]++; });
+      }
+    }
+    const hot10w4 = Object.entries(counts10).filter(([_, c]) => c >= 4).map(([n]) => Number(n));
 
     const lastDigitsCount = {};
     round1Numbers.forEach((n) => {
@@ -621,7 +640,7 @@ export default function App() {
       step3CrowdedDigitNumbers: crowdedDigitNumbers,
       step4CrowdedLineNumbers: crowdedLineNumbers,
     };
-  }, [getDynamicContextData, allNumbers]);
+  }, [getDynamicContextData, getLottoNumbersByRound, latestRound, allNumbers]);
 
   const applySmart12ExcludeSet = () => {
     const {
@@ -1595,7 +1614,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 3] 저장한 번호 목록 모달 (전체화면 적용 - 하단 메인화면 노출 완전 차단) */}
+      {/* [모달 3] 저장한 번호 목록 모달 (전체화면 적용 - 하단 메인화면 노출 완벽 차단) */}
       <Modal
         visible={isSavedModalVisible}
         animationType="slide"
@@ -1814,7 +1833,6 @@ export default function App() {
       >
         <View style={styles.centerModalOverlay}>
           <View style={styles.excludePopupBox}>
-            {/* 상단 탭: 번호 제외 vs 12대 필터 편집 */}
             <View style={styles.excludeTabRow}>
               <TouchableOpacity
                 style={[styles.excludeTabItem, excludePopupTab === 'NUMBERS' && styles.excludeTabItemActive]}
@@ -1845,7 +1863,7 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* [탭 1] 번호 수동 제외 및 4단계 추천 */}
+            {/* [탭 1] 번호 수동 제외 및 과열수 필터링 버튼 패널 */}
             {excludePopupTab === 'NUMBERS' ? (
               <>
                 <View style={styles.excludeCountBar}>
@@ -1865,6 +1883,52 @@ export default function App() {
                 </View>
 
                 <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 480 }}>
+                  {/* [신규 기능] 최근 포함 기준 4단계 극과열수 제외 등록 버튼 패널 */}
+                  <View style={styles.overheatedSectionBox}>
+                    <Text style={styles.overheatedSectionTitle}>
+                      🔥 최근 포함 기준 과열 출현 번호 (터치 시 제외수에 등록):
+                    </Text>
+
+                    <View style={styles.overheatedButtonsGrid}>
+                      <TouchableOpacity
+                        style={styles.overheatedBtn}
+                        onPress={() => handleAddOverheatedToExclude(5, 4, '최근 5주간 4회 이상')}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.overheatedBtnTitle}>5주 4회↑ 출현</Text>
+                        <Text style={styles.overheatedBtnSub}>초단기 극과열 번호</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.overheatedBtn}
+                        onPress={() => handleAddOverheatedToExclude(10, 5, '최근 10주간 5회 이상')}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.overheatedBtnTitle}>10주 5회↑ 출현</Text>
+                        <Text style={styles.overheatedBtnSub}>단기 과열 번호</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.overheatedBtn}
+                        onPress={() => handleAddOverheatedToExclude(15, 7, '최근 15주간 7회 이상')}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.overheatedBtnTitle}>15주 7회↑ 출현</Text>
+                        <Text style={styles.overheatedBtnSub}>중기 과밀 번호</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.overheatedBtn}
+                        onPress={() => handleAddOverheatedToExclude(20, 8, '최근 20주간 8회 이상')}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.overheatedBtnTitle}>20주 8회↑ 출현</Text>
+                        <Text style={styles.overheatedBtnSub}>장기 과열 번호</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {/* 4단계 공식 추천 제외수 패널 */}
                   <View style={styles.smartFormulaPanel}>
                     <View style={styles.smartFormulaHeaderRow}>
                       <Text style={styles.smartFormulaTitle}>🎯 통계 공식 기반 추천 제외수 원터치 적용</Text>
@@ -2027,7 +2091,6 @@ export default function App() {
                   💡 번호 생성 시 적용할 필터 규칙을 직접 켜고 끌 수 있습니다.
                 </Text>
 
-                {/* 소수 최대 출현수 설정 제어 (1~4개 선택) */}
                 <View style={styles.primeSettingCard}>
                   <Text style={styles.primeSettingTitle}>
                     ⭐ 소수(1포함) 최대 허용 개수 설정 (현재: 1 ~ {maxPrimeCount}개)
@@ -2056,7 +2119,6 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 12개 필터 스위치 리스트 */}
                 <View style={styles.filterSwitchList}>
                   {[
                     { key: 'usePrime', title: '1. 소수 출현수 제어', desc: `소수(1포함) 1 ~ ${maxPrimeCount}개 사이만 허용` },
@@ -3111,7 +3173,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
-  // 모달 기본 스타일
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.65)',
@@ -3127,7 +3188,6 @@ const styles = StyleSheet.create({
     maxHeight: '94%',
   },
 
-  // 저장번호 전용 풀스크린 모달 스타일
   fullScreenModalContainer: {
     flex: 1,
     backgroundColor: '#ffffff',
@@ -3343,7 +3403,6 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
 
-  // 제외수 팝업 탭 바
   excludeTabRow: {
     flexDirection: 'row',
     backgroundColor: '#e2e8f0',
@@ -3437,7 +3496,49 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 
-  // 12대 필터 ON/OFF 편집 스타일
+  // [신규] 최근 포함 4단계 과열수 패널 스타일
+  overheatedSectionBox: {
+    backgroundColor: '#fff1f2',
+    marginHorizontal: 10,
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#fecdd3',
+  },
+  overheatedSectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#9f1239',
+    marginBottom: 8,
+  },
+  overheatedButtonsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  overheatedBtn: {
+    width: '48.8%',
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#f43f5e',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+  },
+  overheatedBtnTitle: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#be123c',
+  },
+  overheatedBtnSub: {
+    fontSize: 9,
+    color: '#fb7185',
+    marginTop: 2,
+    fontWeight: '700',
+  },
+
   filterEditorGuide: {
     fontSize: 12,
     color: '#475569',
@@ -3590,6 +3691,28 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginTop: 1,
     fontWeight: '600',
+  },
+
+  quickExcludeRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    gap: 6,
+  },
+  quickExcludeBtn: {
+    flex: 1,
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    paddingVertical: 6,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickExcludeBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#b91c1c',
   },
 
   excludeBallWrapper: {
