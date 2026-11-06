@@ -17,7 +17,6 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as ScreenOrientation from 'expo-screen-orientation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
@@ -120,7 +119,7 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 필수 조건 세이프가드
+// 필수 조건 세이프가드 (총합 100~180, 홀짝, 고저, AC 절대 사수)
 const isEssentialValid = (numbers) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
@@ -145,7 +144,7 @@ const isEssentialValid = (numbers) => {
   return true;
 };
 
-// 12대 기본 통계 검증 함수
+// 12대 생성 필터 검증 함수
 const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
@@ -318,18 +317,6 @@ export default function App() {
   const displayed15Rounds = Array.from({ length: 15 }, (_, i) => winningTopRound - i).filter((r) => r >= 1);
   const bottomRound = displayed15Rounds.length > 0 ? displayed15Rounds[displayed15Rounds.length - 1] : winningTopRound;
 
-  // 앱 실행 시 세로 모드(Portrait) 영구 고정
-  useEffect(() => {
-    async function lockScreen() {
-      try {
-        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLockPlatform.PORTRAIT_UP);
-      } catch (e) {
-        console.log('방향 고정 오류:', e);
-      }
-    }
-    lockScreen();
-  }, []);
-
   const fetchLottoRoundWithFallback = async (drwNo) => {
     const cacheBuster = `?t=${Date.now()}`;
 
@@ -483,7 +470,7 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
-  // 번호 생성 엔진
+  // 번호 생성 엔진 (2단계 세이프가드)
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -505,7 +492,7 @@ export default function App() {
         const candidate = generateBasicLottoSet(excluded);
         if (candidate.length < 6) return [];
 
-        if (isEssentialValid(candidate, { useSum: true, useOddEven: true, useHighLow: true, useAC: true })) {
+        if (isEssentialValid(candidate)) {
           return candidate;
         }
       }
@@ -1288,14 +1275,8 @@ export default function App() {
     }
   };
 
-  // [수정 핵심] QR 스캐너 열기: 세로 모드 강제 고정 보장
+  // QR 스캐너 열기
   const handleOpenQrScanner = async () => {
-    try {
-      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLockPlatform.PORTRAIT_UP);
-    } catch (err) {
-      console.log('방향 락 에러:', err);
-    }
-
     if (!permission || !permission.granted) {
       const res = await requestPermission();
       if (!res.granted) {
@@ -1307,14 +1288,9 @@ export default function App() {
     setIsCameraModalVisible(true);
   };
 
-  // [수정 핵심] QR 스캐너 닫기: 세로 모드 유지
-  const handleCloseQrScanner = async () => {
+  // QR 스캐너 닫기
+  const handleCloseQrScanner = () => {
     setIsCameraModalVisible(false);
-    try {
-      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLockPlatform.PORTRAIT_UP);
-    } catch (err) {
-      console.log('방향 유지 에러:', err);
-    }
   };
 
   const handleBarcodeScanned = async ({ data }) => {
@@ -1901,7 +1877,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 4] 10대 알고리즘 기반 제외수 설정 모달 (12대 생성필터 탭 삭제 완료) */}
+      {/* [모달 4] 10대 알고리즘 기반 제외수 설정 모달 (12대 생성 필터 탭 삭제) */}
       <Modal
         visible={isExcludeModalVisible}
         animationType="fade"
@@ -2296,7 +2272,7 @@ export default function App() {
                             roundData.numbers,
                             r,
                             `제 ${r}회 당첨번호 정밀 분석`,
-                            `${roundData.drwNoDate} 공식 결과 심층 데이터 분석`,
+                            `제${r}회 당시 공식 기준 심층 데이터 분석`,
                             roundData.bnusNo,
                             'WINNING',
                             r
@@ -2501,7 +2477,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 2. 용지 마킹 패턴표 */}
+                {/* 2. 번호 바로 아래 용지 마킹 패턴표 */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
@@ -2792,7 +2768,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 6. 번호별 최근 30회 빈도 및 미출현 주기 */}
+                {/* 6. 번호별 최근 30회 빈도 및 직전 미출현 주기 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     📈 번호별 최근 30회 빈도 및 미출현 주기 ({analysisTargetData.sourceType === 'WINNING' ? `제${analysisTargetData.sourceIndex}회 기준` : `최신 제${latestRound}회 기준`})
@@ -2854,7 +2830,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 8] QR 코드 스캐너 모달 (세로 모드 고정 속성 적용) */}
+      {/* [모달 8] QR 코드 스캐너 모달 (세로 고정) */}
       <Modal
         visible={isCameraModalVisible}
         animationType="fade"
@@ -2942,7 +2918,7 @@ export default function App() {
                     </View>
                   ))}
                   <Text style={styles.refPlus}>+</Text>
-                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(qrResultData.winningInfo.bnusNo) }]}>
+                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(latestWinningInfo.bnusNo) }]}>
                     <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : qrResultData.winningInfo.bnusNo}</Text>
                   </View>
                 </View>
@@ -4300,164 +4276,4 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
     marginBottom: 4,
   },
-  thText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#64748b',
-  },
-  tableRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 3,
-  },
-  microBall: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  microBallText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  tdText: {
-    fontSize: 11,
-  },
-  pairRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-  },
-  pairRankBadge: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#d97706',
-  },
-  pairCountText: {
-    fontSize: 11,
-    color: '#475569',
-  },
-  scannerWrapper: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  scannerOverlay: {
-    flex: 1,
-    justifyContent: 'space-between',
-  },
-  scannerHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-  },
-  scannerHeaderTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  scannerCloseBtn: {
-    padding: 6,
-  },
-  scannerCloseIcon: {
-    color: '#ffffff',
-    fontSize: 22,
-    fontWeight: 'bold',
-  },
-  scannerBody: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  scanTargetBox: {
-    width: 240,
-    height: 240,
-    position: 'relative',
-  },
-  cornerBracket: {
-    position: 'absolute',
-    width: 24,
-    height: 24,
-    borderColor: '#38bdf8',
-  },
-  bracketTL: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4 },
-  bracketTR: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4 },
-  bracketBL: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4 },
-  bracketBR: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4 },
-  scannerFooter: {
-    alignItems: 'center',
-    paddingBottom: 30,
-    paddingHorizontal: 20,
-  },
-  scannerGuideText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '800',
-    marginBottom: 4,
-  },
-  scannerSubGuideText: {
-    color: '#94a3b8',
-    fontSize: 12,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  scannerBottomBtn: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingVertical: 10,
-    paddingHorizontal: 32,
-    borderRadius: 8,
-  },
-  scannerBottomBtnText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  searchRow: {
-    flexDirection: 'row',
-    gap: 6,
-    marginVertical: 6,
-  },
-  searchInput: {
-    flex: 1,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    fontSize: 12,
-  },
-  searchBtn: {
-    backgroundColor: '#2563eb',
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  roundBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  roundBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#2563eb',
-  },
-  disabledText: {
-    color: '#cbd5e1',
-  },
-  currentRoundText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  winning15Scroll: {
-    flex: 1,
-    marginVertical: 4,
-  },
-});
+  
