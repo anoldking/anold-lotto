@@ -37,14 +37,10 @@ const BALL_SIZE = Math.floor((POPUP_WIDTH - 28 - BALL_GAP * 6) / 7);
 const GITHUB_USERNAME = 'anoldking';
 const REPO_NAME = 'anold-lotto';
 
-// [1차 서버] GitHub CDN 정적 호스팅 주소
 const PRIMARY_CDN_LATEST = `https://raw.githubusercontent.com/${GITHUB_USERNAME}/${REPO_NAME}/main/data/latest.json`;
 const PRIMARY_CDN_HISTORY = `https://raw.githubusercontent.com/${GITHUB_USERNAME}/${REPO_NAME}/main/data/history.min.json`;
-
-// [2차 서버] 동행복권 공식 API 폴백 주소
 const SECONDARY_OFFICIAL_API = 'https://www.dhlottery.co.kr/common.do?method=getLottoNumber';
 
-// 토요일 21:15 KST 기준 계산
 const calculateCurrentLatestRound = () => {
   const firstDrawDate = new Date('2002-12-07T21:15:00+09:00');
   const now = new Date();
@@ -78,12 +74,9 @@ const getBallColor = (number) => {
   return '#22c55e';
 };
 
-// 1을 포함한 소수 집합 정의
 const PRIME_SET_WITH_ONE = new Set([1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43]);
-// 쌍둥이수 집합 (11, 22, 33, 44)
 const TWIN_NUMBERS = new Set([11, 22, 33, 44]);
 
-// 제외수를 반영한 번호 풀 추출
 const generateBasicLottoSet = (excludedNumbers = []) => {
   const pool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
     (n) => !excludedNumbers.includes(n)
@@ -99,7 +92,6 @@ const generateBasicLottoSet = (excludedNumbers = []) => {
   return Array.from(selected).sort((a, b) => a - b);
 };
 
-// AC값 계산
 const calculateACValue = (sorted) => {
   const diffs = new Set();
   for (let i = 0; i < sorted.length; i++) {
@@ -110,7 +102,6 @@ const calculateACValue = (sorted) => {
   return diffs.size - (sorted.length - 1);
 };
 
-// 7x7 용지 마킹 패턴 계산
 const getPaperDeadPattern = (numbers) => {
   const rowCounts = [0, 0, 0, 0, 0, 0, 0];
   const colCounts = [0, 0, 0, 0, 0, 0, 0];
@@ -128,13 +119,45 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 번호 생성 검증 판별기
+// 필수 뼈대 검증 (세이프가드용: 총합, 홀짝, 고저, AC, 시작/끝수)
+const isEssentialValid = (numbers, filters) => {
+  const sorted = [...numbers].sort((a, b) => a - b);
+  const minNum = sorted[0];
+  const maxNum = sorted[5];
+
+  if (minNum > 15 || maxNum < 30) return false;
+  const range = maxNum - minNum;
+  if (range < 25 || range > 44) return false;
+
+  if (filters.useSum) {
+    const sum = sorted.reduce((acc, cur) => acc + cur, 0);
+    if (sum < 100 || sum > 180) return false;
+  }
+
+  if (filters.useOddEven) {
+    const oddCount = sorted.filter((n) => n % 2 !== 0).length;
+    if (oddCount < 2 || oddCount > 4) return false;
+  }
+
+  if (filters.useHighLow) {
+    const lowCount = sorted.filter((n) => n <= 22).length;
+    if (lowCount < 2 || lowCount > 4) return false;
+  }
+
+  if (filters.useAC) {
+    const ac = calculateACValue(sorted);
+    if (ac < 7 || ac > 10) return false;
+  }
+
+  return true;
+};
+
+// 12대 정밀 필터 검증
 const isStrictStatisticallyValid = (numbers, dynamicContext, filters, maxPrimeLimit = 3) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
   const maxNum = sorted[5];
 
-  // 기본 간격 & 고저차
   if (minNum > 15 || maxNum < 30) return false;
   const range = maxNum - minNum;
   if (range < 25 || range > 44) return false;
@@ -500,13 +523,14 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
-  // 번호 생성기
+  // [수정 핵심] 2단계 세이프가드 번호 생성기 (총합 80~100 등 기형 번호 생성 원천 차단)
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
 
+      // [1단계]: 12대 정밀 조건 전체 충족 조합 탐색 (최대 20,000회)
       let attempts = 0;
-      while (attempts < 15000) {
+      while (attempts < 20000) {
         attempts++;
         const candidate = generateBasicLottoSet(excluded);
         if (candidate.length < 6) return [];
@@ -516,7 +540,26 @@ export default function App() {
         }
       }
 
-      return generateBasicLottoSet(excluded);
+      // [2단계 세이프가드]: 조건 간 충돌 시에도 총합 100~180, 홀짝, 고저, AC값은 절대 사수
+      attempts = 0;
+      while (attempts < 5000) {
+        attempts++;
+        const candidate = generateBasicLottoSet(excluded);
+        if (candidate.length < 6) return [];
+
+        if (isEssentialValid(candidate, filterSettings)) {
+          return candidate;
+        }
+      }
+
+      // 최후의 경우에도 총합 100~180 범위 강제 보장
+      while (true) {
+        const candidate = generateBasicLottoSet(excluded);
+        const sum = candidate.reduce((acc, cur) => acc + cur, 0);
+        if (sum >= 100 && sum <= 180) {
+          return candidate;
+        }
+      }
     },
     [getDynamicContextData, filterSettings, maxPrimeCount]
   );
@@ -678,7 +721,7 @@ export default function App() {
     Alert.alert('스마트 추천 제외수 적용', `총 ${finalResult.length}개 추천 번호가 제외수로 설정되었습니다.\n\n번호: ${finalResult.join(', ')}`);
   };
 
-  // 공용 정밀 분석 데이터 생성기 (최신 당첨번호 기준)
+  // ================= [공용 정밀 분석 데이터 생성기 (표준 대조 기준 정상화)] =================
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -686,6 +729,7 @@ export default function App() {
       const nums = [...targetNumbers].sort((a, b) => a - b);
       const numSet = new Set(nums);
 
+      // 역대 누적 등수별 당첨 횟수 (1회부터 최신 회차 latestRound까지)
       let rank3Count = 0;
       let rank4Count = 0;
       let rank5Count = 0;
@@ -705,24 +749,32 @@ export default function App() {
       const lowCount = nums.filter((n) => n <= 22).length;
       const highCount = 6 - lowCount;
 
+      // [기준 정상화 1] 이월수 계산:
+      // - 당첨번호: 해당 회차(baseRound) 직전 회차(baseRound - 1) 번호와의 일치수
+      // - 저장번호: 최신 공식 회차(latestRound) 당첨번호와의 일치수
       let carryOverNumbers = [];
-      const latestOfficialData = getLottoNumbersByRound(latestRound);
-
-      if (latestOfficialData && latestOfficialData.numbers && !latestOfficialData.isPending) {
-        if (sourceType === 'WINNING' && sourceIndex === latestRound) {
-          const prevRoundData = getLottoNumbersByRound(latestRound - 1);
+      if (sourceType === 'WINNING') {
+        if (baseRound > 1) {
+          const prevRoundData = getLottoNumbersByRound(baseRound - 1);
           if (prevRoundData && prevRoundData.numbers && !prevRoundData.isPending) {
             carryOverNumbers = nums.filter((n) => prevRoundData.numbers.includes(n));
           }
-        } else {
+        }
+      } else {
+        const latestOfficialData = getLottoNumbersByRound(latestRound);
+        if (latestOfficialData && latestOfficialData.numbers && !latestOfficialData.isPending) {
           carryOverNumbers = nums.filter((n) => latestOfficialData.numbers.includes(n));
         }
       }
 
+      // [기준 정상화 2] 최근 30회 출현 빈도:
+      // - 당첨번호: 해당 회차(baseRound) 직전 30회(baseRound ~ baseRound-29) 빈도
+      // - 저장번호: 최신 공식 회차(latestRound) 직전 30회 빈도
+      const targetBaseRound = sourceType === 'WINNING' ? baseRound : latestRound;
       const recent30Counts = {};
       nums.forEach((n) => (recent30Counts[n] = 0));
-      const startR = Math.max(1, latestRound - 30);
-      for (let r = latestRound; r >= startR; r--) {
+      const startR = Math.max(1, targetBaseRound - 30);
+      for (let r = targetBaseRound; r >= startR; r--) {
         const rData = getLottoNumbersByRound(r);
         if (rData && rData.numbers && !rData.isPending) {
           rData.numbers.forEach((n) => {
@@ -733,10 +785,14 @@ export default function App() {
         }
       }
 
+      // [기준 정상화 3] 미출현 주기(공백 텀):
+      // - 당첨번호: 해당 회차 직전(baseRound - 1)부터 역산하여 "당시 몇 주 만에 출현했는가"
+      // - 저장번호: 최신 공식 회차(latestRound)부터 역산하여 "현재 몇 주 연속 미출현 중인가"
       const absenceWeeks = {};
       nums.forEach((n) => {
         let count = 0;
-        for (let r = latestRound; r >= 1; r--) {
+        const searchStartRound = sourceType === 'WINNING' ? baseRound - 1 : latestRound;
+        for (let r = searchStartRound; r >= 1; r--) {
           const rData = getLottoNumbersByRound(r);
           if (rData && rData.numbers && !rData.isPending && rData.numbers.includes(n)) {
             break;
@@ -772,9 +828,12 @@ export default function App() {
       const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 3);
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
-      const numbersThisWeek = getLottoNumbersByRound(latestRound)?.numbers || [];
-      const numbers1WeekAgo = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : [];
-      const numbers2WeeksAgo = latestRound > 2 ? getLottoNumbersByRound(latestRound - 2)?.numbers || [] : [];
+      // [기준 정상화 4] 용지 마킹 비교 주차:
+      // - 당첨번호: 🔴 baseRound / 🔵 baseRound - 1 / 🟢 baseRound - 2
+      // - 저장번호: 🔴 latestRound / 🔵 latestRound - 1 / 🟢 latestRound - 2
+      const numbersThisWeek = getLottoNumbersByRound(targetBaseRound)?.numbers || [];
+      const numbers1WeekAgo = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
+      const numbers2WeeksAgo = targetBaseRound > 2 ? getLottoNumbersByRound(targetBaseRound - 2)?.numbers || [] : [];
 
       const primeNumbers = nums.filter((n) => PRIME_SET_WITH_ONE.has(n));
       const compositeNumbers = nums.filter((n) => !PRIME_SET_WITH_ONE.has(n));
@@ -810,7 +869,7 @@ export default function App() {
         subText,
         sourceType,
         sourceIndex,
-        baseRound: latestRound,
+        baseRound: targetBaseRound,
         numbersThisWeek,
         numbers1WeekAgo,
         numbers2WeeksAgo,
@@ -863,7 +922,6 @@ export default function App() {
     return flat;
   }, [savedSets, gameLabels]);
 
-  // 저장번호 정밀분석 화면에서 현재 보고 있는 게임 직접 삭제 핸들러
   const handleDeleteGameFromAnalysis = (targetIndex) => {
     const flatList = getFlatSavedGames();
     if (targetIndex < 0 || targetIndex >= flatList.length) return;
@@ -946,7 +1004,7 @@ export default function App() {
       roundData.numbers,
       targetRound,
       `제 ${targetRound}회 당첨번호 정밀 분석`,
-      `제${latestRound}회 최신 공식 기준 심층 데이터 분석`,
+      `${roundData.drwNoDate} 공식 결과 심층 데이터 분석`,
       roundData.bnusNo,
       'WINNING',
       targetRound
@@ -2358,7 +2416,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 6] 전회차 당첨결과 모달 (전체화면 - 하단 메인 화면 제거) */}
+      {/* [모달 6] 전회차 당첨결과 모달 (전체화면) */}
       <Modal
         visible={isWinningModalVisible}
         animationType="slide"
@@ -2468,7 +2526,7 @@ export default function App() {
                             roundData.numbers,
                             r,
                             `제 ${r}회 당첨번호 정밀 분석`,
-                            `최신 제${latestRound}회 공식 기준 심층 데이터 분석`,
+                            `${roundData.drwNoDate} 공식 결과 심층 데이터 분석`,
                             roundData.bnusNo,
                             'WINNING',
                             r
@@ -2591,7 +2649,7 @@ export default function App() {
               </View>
             )}
 
-            {/* 저장번호 정밀분석 네비게이션: 현재 번호 옆에 [🗑️ 삭제] 버튼 추가 */}
+            {/* 저장번호 정밀분석: 현재 번호 옆에 [🗑️ 삭제] 버튼 배치 */}
             {analysisTargetData?.sourceType === 'SAVED' && (
               <View style={styles.analysisNavSubBar}>
                 <TouchableOpacity
@@ -2654,7 +2712,7 @@ export default function App() {
 
             {analysisTargetData && (
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 10 }}>
-                {/* 1. 번호 볼 표시 바 */}
+                {/* 1. 번호 볼 바 */}
                 <View style={styles.analysisBallsCard}>
                   <View style={styles.analysisBallsRow}>
                     {analysisTargetData.numbers.map((n) => (
@@ -2673,14 +2731,16 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 2. [위치 이동] 저장번호 바로 아래로 로또 용지 마킹 패턴표 배치 */}
+                {/* 2. [위치 조정] 번호 바로 아래에 로또 용지 마킹 패턴표 배치 */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
                       📋 로또 용지 마킹 패턴표 (7×7 SLIP)
                     </Text>
                     <Text style={styles.slipSubDesc}>
-                      순수 6개 번호 마킹 기준 및 최근 주차 비교 (보너스 제외)
+                      {analysisTargetData.sourceType === 'WINNING'
+                        ? `제${analysisTargetData.sourceIndex}회 기준 순수 6개 번호 및 직전 주차 비교`
+                        : `최신 제${latestRound}회 기준 순수 6개 번호 및 직전 주차 비교`}
                     </Text>
                   </View>
 
@@ -2693,7 +2753,7 @@ export default function App() {
                       activeOpacity={0.75}
                     >
                       <Text style={[styles.patternToggleBtnText, showPatternThisWeek && styles.patternToggleBtnTextActive]}>
-                        🔴 이번주 {showPatternThisWeek ? 'ON' : 'OFF'}
+                        🔴 {analysisTargetData.sourceType === 'WINNING' ? '당시회차' : '이번주'} {showPatternThisWeek ? 'ON' : 'OFF'}
                       </Text>
                     </TouchableOpacity>
 
@@ -2813,7 +2873,9 @@ export default function App() {
                     </Text>
                   </View>
                   <View style={styles.metricItem}>
-                    <Text style={styles.metricLabel}>최신 당첨 이월수</Text>
+                    <Text style={styles.metricLabel}>
+                      {analysisTargetData.sourceType === 'WINNING' ? '전회차 이월수' : '최신 당첨 일치수'}
+                    </Text>
                     <Text style={[styles.metricValue, { color: '#dc2626' }]}>
                       {analysisTargetData.carryOverNumbers.length > 0
                         ? `${analysisTargetData.carryOverNumbers.join(', ')} (${analysisTargetData.carryOverNumbers.length}개)`
@@ -2844,7 +2906,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 4. [위치 이동] 특수수 및 핵심 패턴 심층 지표 (누적 당첨 횟수 바로 위로 이동) */}
+                {/* 4. [위치 조정] 특수수 및 핵심 패턴 심층 지표 (누적 당첨 횟수 위 배치) */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🔍 특수수 및 핵심 패턴 심층 지표
@@ -2905,7 +2967,11 @@ export default function App() {
                     </View>
 
                     <View style={styles.detailMetricCardFull}>
-                      <Text style={styles.detailMetricHeader}>🔥 핫수(최단기 출현) & ❄️ 콜드수(최장기 미출)</Text>
+                      <Text style={styles.detailMetricHeader}>
+                        {analysisTargetData.sourceType === 'WINNING'
+                          ? `제${analysisTargetData.sourceIndex}회 추첨 당시 핫수 & 콜드수`
+                          : `현재 제${latestRound}회 기준 핫수 & 콜드수`}
+                      </Text>
                       <View style={styles.hotColdRow}>
                         <View style={styles.hotBadgeBox}>
                           <Text style={styles.hotBadgeTitle}>🔥 핫수 (최단기 출현)</Text>
@@ -2913,7 +2979,9 @@ export default function App() {
                             {analysisTargetData.hotNumbersInSet.join(', ')}번
                           </Text>
                           <Text style={styles.hotBadgeSub}>
-                            {analysisTargetData.minAbsenceVal === 0 ? '최신 공식회차 출현수' : `최신 기준 ${analysisTargetData.minAbsenceVal}주 미출`}
+                            {analysisTargetData.minAbsenceVal === 0
+                              ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 출현수' : '최신 공식회차 출현수')
+                              : `${analysisTargetData.minAbsenceVal}주 만에 출현`}
                           </Text>
                         </View>
 
@@ -2923,7 +2991,9 @@ export default function App() {
                             {analysisTargetData.coldNumbersInSet.join(', ')}번
                           </Text>
                           <Text style={styles.coldBadgeSub}>
-                            {analysisTargetData.maxAbsenceVal === 0 ? '최신 공식회차 출현' : `최신 기준 ${analysisTargetData.maxAbsenceVal}주 미출`}
+                            {analysisTargetData.maxAbsenceVal === 0
+                              ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 출현' : '최신 공식회차 출현')
+                              : `${analysisTargetData.maxAbsenceVal}주 미출현 후 출현`}
                           </Text>
                         </View>
                       </View>
@@ -2955,12 +3025,12 @@ export default function App() {
                 {/* 6. 번호별 최근 30회 빈도 및 직전 미출현 주기 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
-                    📈 번호별 최근 30회 빈도 및 직전 미출현 주기 (최신 제{latestRound}회 기준)
+                    📈 번호별 최근 30회 빈도 및 미출현 주기 ({analysisTargetData.sourceType === 'WINNING' ? `제${analysisTargetData.sourceIndex}회 기준` : `최신 제${latestRound}회 기준`})
                   </Text>
                   <View style={styles.tableHeader}>
                     <Text style={[styles.thText, { width: '22%' }]}>번호</Text>
                     <Text style={[styles.thText, { width: '38%' }]}>최근 30회 출현</Text>
-                    <Text style={[styles.thText, { width: '40%' }]}>최신 기준 미출 텀</Text>
+                    <Text style={[styles.thText, { width: '40%' }]}>미출현 텀</Text>
                   </View>
                   {analysisTargetData.numbers.map((n) => (
                     <View key={`freq-row-${n}`} style={styles.tableRow}>
@@ -2974,8 +3044,8 @@ export default function App() {
                       </Text>
                       <Text style={[styles.tdText, { width: '40%', color: '#475569' }]}>
                         {analysisTargetData.absenceWeeks[n] === 0
-                          ? '최신 당첨번호 출현'
-                          : `최신 기준 ${analysisTargetData.absenceWeeks[n]}주 미출`}
+                          ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 출현' : '최신 회차 출현')
+                          : `${analysisTargetData.absenceWeeks[n]}주 만에 출현`}
                       </Text>
                     </View>
                   ))}
@@ -3101,7 +3171,7 @@ export default function App() {
                     </View>
                   ))}
                   <Text style={styles.refPlus}>+</Text>
-                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(qrResultData.winningInfo.bnusNo) }]}>
+                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(latestWinningInfo.bnusNo) }]}>
                     <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : qrResultData.winningInfo.bnusNo}</Text>
                   </View>
                 </View>
