@@ -290,7 +290,6 @@ export default function App() {
   const [manualSelectedNumbers, setManualSelectedNumbers] = useState([]);
   const [isManualModalVisible, setIsManualModalVisible] = useState(false);
 
-  // 최신 당첨번호 직접 수동 입력 모달 관련 상태
   const [isManualWinningModalVisible, setIsManualWinningModalVisible] = useState(false);
   const [inputWinningRound, setInputWinningRound] = useState('');
   const [inputWinningDate, setInputWinningDate] = useState('');
@@ -474,6 +473,7 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
+  // 2단계 세이프가드 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -511,6 +511,7 @@ export default function App() {
     [getDynamicContextData]
   );
 
+  // 10대 제외 예측 알고리즘 분석 모듈
   const get10ExclusionAnalytics = useCallback(() => {
     const round0 = getLottoNumbersByRound(latestRound)?.numbers || [];
     const round1 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : [];
@@ -637,6 +638,158 @@ export default function App() {
     );
   };
 
+  // =================================================================
+  // [역대 2수 동반 출현 빈도 매트릭스 계산 및 최적 대체 수 교체 엔진]
+  // =================================================================
+  const getPairOccurrences = useCallback(
+    (n1, n2) => {
+      let count = 0;
+      for (let r = 1; r <= latestRound; r++) {
+        const rData = getLottoNumbersByRound(r);
+        if (rData && rData.numbers && !rData.isPending) {
+          if (rData.numbers.includes(n1) && rData.numbers.includes(n2)) {
+            count++;
+          }
+        }
+      }
+      return count;
+    },
+    [latestRound, getLottoNumbersByRound]
+  );
+
+  // 10회 미만 궁합 번호 배제 및 최적 대체수 교체 로직
+  const optimizeGameWithPairAffinity = (currentNumbers, targetFlatIndex = null) => {
+    if (!currentNumbers || currentNumbers.length < 6) return;
+
+    const nums = [...currentNumbers].sort((a, b) => a - b);
+    const weakPairs = [];
+
+    // 15개 2수 쌍 전수 검사
+    for (let i = 0; i < nums.length; i++) {
+      for (let j = i + 1; j < nums.length; j++) {
+        const n1 = nums[i];
+        const n2 = nums[j];
+        const count = getPairOccurrences(n1, n2);
+        if (count < 10) {
+          weakPairs.push({ n1, n2, count });
+        }
+      }
+    }
+
+    if (weakPairs.length === 0) {
+      Alert.alert('궁합 검사 완료', '현재 6개 번호의 모든 2수 조합이 동반 출현 10회 이상으로 매우 우수한 황금 궁합을 유지하고 있습니다.');
+      return;
+    }
+
+    // 10회 미만 쌍 중 가장 빈도가 낮은 최악의 쌍 선정
+    weakPairs.sort((a, b) => a.count - b.count);
+    const worstPair = weakPairs[0];
+
+    // 두 번호 중 나머지 4개 번호와의 동반 출현 총합이 더 낮은 번호를 교체 대상으로 선정
+    const score1 = nums
+      .filter((n) => n !== worstPair.n1)
+      .reduce((sum, n) => sum + getPairOccurrences(worstPair.n1, n), 0);
+    const score2 = nums
+      .filter((n) => n !== worstPair.n2)
+      .reduce((sum, n) => sum + getPairOccurrences(worstPair.n2, n), 0);
+
+    const toRemove = score1 <= score2 ? worstPair.n1 : worstPair.n2;
+    const remaining5 = nums.filter((n) => n !== toRemove);
+
+    // 후보 번호군(1~45 중 기존 번호와 설정된 제외수를 뺀 풀) 탐색
+    const candidatesPool = allNumbers.filter(
+      (n) => !nums.includes(n) && !excludedNumbers.includes(n)
+    );
+
+    let bestCandidate = null;
+    let highestAffinityScore = -1;
+
+    for (const cand of candidatesPool) {
+      const testSet = [...remaining5, cand].sort((a, b) => a - b);
+
+      // 기본 총합 및 밸런스 검증
+      if (!isEssentialValid(testSet)) continue;
+
+      // 남은 5개 번호와의 동반 출현 횟수 검사
+      let totalAffinity = 0;
+      let hasWeakPair = false;
+
+      for (const rem of remaining5) {
+        const pCnt = getPairOccurrences(cand, rem);
+        if (pCnt < 10) {
+          hasWeakPair = true; // 10회 미만이 있으면 제외
+          break;
+        }
+        totalAffinity += pCnt;
+      }
+
+      if (!hasWeakPair && totalAffinity > highestAffinityScore) {
+        highestAffinityScore = totalAffinity;
+        bestCandidate = cand;
+      }
+    }
+
+    // 만약 전원 10회 이상인 후보가 없다면, 총합 궁합 점수가 가장 높은 번호로 대체
+    if (bestCandidate === null) {
+      for (const cand of candidatesPool) {
+        const testSet = [...remaining5, cand].sort((a, b) => a - b);
+        if (!isEssentialValid(testSet)) continue;
+
+        let totalAffinity = 0;
+        for (const rem of remaining5) {
+          totalAffinity += getPairOccurrences(cand, rem);
+        }
+
+        if (totalAffinity > highestAffinityScore) {
+          highestAffinityScore = totalAffinity;
+          bestCandidate = cand;
+        }
+      }
+    }
+
+    if (bestCandidate === null) {
+      Alert.alert('보정 불가', '제외수 설정 및 기본 밸런스(총합 100~180)를 만족하면서 대체할 번호를 찾지 못했습니다.');
+      return;
+    }
+
+    const optimizedNumbers = [...remaining5, bestCandidate].sort((a, b) => a - b);
+
+    // 저장번호 목록 및 정밀분석 화면 즉각 업데이트
+    if (targetFlatIndex !== null) {
+      const flatList = getFlatSavedGames();
+      const targetItem = flatList[targetFlatIndex];
+
+      const updatedSavedSets = savedSets.map((set) => {
+        if (set.id === targetItem.id) {
+          const updatedGames = [...set.games];
+          updatedGames[targetItem.gIdx] = optimizedNumbers;
+          return { ...set, games: updatedGames };
+        }
+        return set;
+      });
+
+      setSavedSets(updatedSavedSets);
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedSavedSets));
+
+      const updatedAnalysis = calculateNumbersAnalysis(
+        optimizedNumbers,
+        latestRound,
+        `저장 번호 정밀 분석 (${targetItem.gameLabel})`,
+        `저장일시: ${targetItem.date} | 2수 궁합 10회 이상 보정 완료`,
+        null,
+        'SAVED',
+        targetFlatIndex
+      );
+      setAnalysisTargetData(updatedAnalysis);
+    }
+
+    Alert.alert(
+      '🤝 궁합 보정 완료',
+      `최약 궁합 번호 [${toRemove}]번을 배제하고,\n나머지 번호들과 케미가 가장 우수한 [${bestCandidate}]번으로 성공적으로 교체했습니다!\n\n보정 전: [${nums.join(', ')}]\n보정 후: [${optimizedNumbers.join(', ')}]`
+    );
+  };
+
+  // 공용 정밀 분석 데이터 생성기 (TOP 5 동반 출현 확장)
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -730,7 +883,8 @@ export default function App() {
         }
       }
 
-      const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 3);
+      // [핵심 변경] 동반 출현 횟수 TOP 3 -> TOP 5까지 확장 추출
+      const topPairs = Object.values(pairCounts).sort((a, b) => b.count - a.count).slice(0, 5);
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
       const numbersThisWeek = getLottoNumbersByRound(targetBaseRound)?.numbers || [];
@@ -992,7 +1146,6 @@ export default function App() {
     }
   };
 
-  // 회차 번호 입력 시 기존 캐시 데이터 자동 프리필
   const handleWinningRoundChange = (roundText) => {
     setInputWinningRound(roundText);
     const rNum = parseInt(roundText.trim(), 10);
@@ -1071,7 +1224,6 @@ export default function App() {
     }
   };
 
-  // [신규 핵심] 입력된 회차의 당첨번호 데이터 영구 삭제 처리기
   const handleDeleteManualWinningRound = () => {
     const roundNum = parseInt(inputWinningRound.trim(), 10);
     if (isNaN(roundNum) || roundNum < 1) {
@@ -2394,7 +2546,6 @@ export default function App() {
               </View>
             </ScrollView>
 
-            {/* 수동 등록 / 회차 삭제 / 초기화 3단 버튼 */}
             <View style={styles.excludePopupBtnRow}>
               <TouchableOpacity
                 style={[styles.excludeConfirmOrangeBtn, { backgroundColor: '#1d4ed8' }]}
@@ -2668,6 +2819,7 @@ export default function App() {
               </View>
             )}
 
+            {/* 저장번호 정밀분석: 현재 번호 옆에 [🗑️ 삭제] 및 [🤝 궁합 보정] 버튼 배치 */}
             {analysisTargetData?.sourceType === 'SAVED' && (
               <View style={styles.analysisNavSubBar}>
                 <TouchableOpacity
@@ -2748,6 +2900,22 @@ export default function App() {
                     )}
                   </View>
                 </View>
+
+                {/* [신규 핵심] 저장 번호 정밀 분석 시: 2수 궁합 10회 미만 대체수 보정 원클릭 버튼 */}
+                {analysisTargetData.sourceType === 'SAVED' && (
+                  <TouchableOpacity
+                    style={styles.pairOptimizationBtn}
+                    onPress={() => optimizeGameWithPairAffinity(analysisTargetData.numbers, analysisTargetData.sourceIndex)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.pairOptimizationBtnTitle}>
+                      🤝 2수 궁합 보정 (10회 미만 배제 및 최적 대체수 교체)
+                    </Text>
+                    <Text style={styles.pairOptimizationBtnSub}>
+                      * 6개 번호 간 동반 출현 10회 미만 약한 궁합을 찾아 최다 케미 수로 교체
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
                 {/* 2. 로또 용지 마킹 패턴표 */}
                 <View style={styles.analysisSectionCard}>
@@ -3069,10 +3237,10 @@ export default function App() {
                   ))}
                 </View>
 
-                {/* 7. 번호간 동반 출현 횟수 TOP 3 */}
+                {/* 7. [수정 핵심] 번호간 동반 출현 횟수 TOP 5 출력 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
-                    🤝 번호간 동반 출현 횟수 TOP 3 (케미 번호)
+                    🤝 번호간 동반 출현 횟수 TOP 5 (케미 번호)
                   </Text>
                   {analysisTargetData.topPairs.map((p, idx) => (
                     <View key={`pair-${idx}`} style={styles.pairRow}>
@@ -3190,7 +3358,7 @@ export default function App() {
                     </View>
                   ))}
                   <Text style={styles.refPlus}>+</Text>
-                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(qrResultData.winningInfo.bnusNo) }]}>
+                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(latestWinningInfo.bnusNo) }]}>
                     <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : qrResultData.winningInfo.bnusNo}</Text>
                   </View>
                 </View>
@@ -3508,6 +3676,28 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#dc2626',
+  },
+
+  // 궁합 보정 버튼 스타일
+  pairOptimizationBtn: {
+    backgroundColor: '#2563eb',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+    elevation: 2,
+  },
+  pairOptimizationBtnTitle: {
+    color: '#ffffff',
+    fontSize: 12.5,
+    fontWeight: '900',
+  },
+  pairOptimizationBtnSub: {
+    color: '#bfdbfe',
+    fontSize: 9.5,
+    marginTop: 2,
+    fontWeight: '600',
   },
 
   manualTopOptionBtn: {
