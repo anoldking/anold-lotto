@@ -119,7 +119,6 @@ const getPaperDeadPattern = (numbers) => {
   return { deadRows, deadCols, rowCounts, colCounts };
 };
 
-// 필수 뼈대 조건 검증 (총합 100~180 절대 보장)
 const isEssentialValid = (numbers) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
@@ -144,7 +143,6 @@ const isEssentialValid = (numbers) => {
   return true;
 };
 
-// 12대 생성 필터 내부 통합 검증기
 const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
@@ -173,23 +171,18 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const ac = calculateACValue(sorted);
   if (ac < 7 || ac > 10) return false;
 
-  // 소수(1 포함) 1~3개 허용
   const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
   if (primeCount < 1 || primeCount > 3) return false;
 
-  // 3의 배수 1~3개
   const mult3Count = sorted.filter((n) => n % 3 === 0).length;
   if (mult3Count < 1 || mult3Count > 3) return false;
 
-  // 5의 배수 최대 2개
   const mult5Count = sorted.filter((n) => n % 5 === 0).length;
   if (mult5Count >= 3) return false;
 
-  // 쌍둥이수 최대 1개
   const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
   if (twinCount >= 2) return false;
 
-  // 동일 끝수 최대 2개 (3개 이상 차단)
   const lastDigitCounts = {};
   for (const n of sorted) {
     const d = n % 10;
@@ -197,7 +190,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
     if (lastDigitCounts[d] >= 3) return false;
   }
 
-  // 3연번 차단 & 2연번 1쌍 이하
   let consecutivePairs = 0;
   for (let i = 0; i < sorted.length - 1; i++) {
     if (sorted[i + 1] - sorted[i] === 1) {
@@ -210,7 +202,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   }
   if (consecutivePairs > 1) return false;
 
-  // 10단위 구간 멸 1~2개
   const sectionCounts = [0, 0, 0, 0, 0];
   sorted.forEach((n) => {
     if (n <= 9) sectionCounts[0]++;
@@ -222,7 +213,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const deadSections = sectionCounts.filter((cnt) => cnt === 0).length;
   if (deadSections < 1 || deadSections > 2) return false;
 
-  // 7x7 용지 마킹 멸 패턴 (가로/세로 멸 2~4개)
   const { deadRows, deadCols } = getPaperDeadPattern(sorted);
   if (deadRows < 2 || deadRows > 4) return false;
   if (deadCols < 2 || deadCols > 4) return false;
@@ -230,13 +220,11 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   if (dynamicContext) {
     const { round1Numbers, doubleCarryOver } = dynamicContext;
 
-    // 직전 이월수 최대 1개
     if (round1Numbers && round1Numbers.length > 0) {
       const carryCount = sorted.filter((n) => round1Numbers.includes(n)).length;
       if (carryCount >= 2) return false;
     }
 
-    // 2주 연속 이월수 차단
     if (doubleCarryOver && doubleCarryOver.length > 0) {
       if (sorted.some((n) => doubleCarryOver.includes(n))) return false;
     }
@@ -245,7 +233,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   return true;
 };
 
-// QR 파서
 const parseLottoQrUrl = (url) => {
   try {
     const vIndex = url.indexOf('?v=') !== -1 ? url.indexOf('?v=') + 3 : (url.indexOf('&v=') !== -1 ? url.indexOf('&v=') + 3 : -1);
@@ -294,16 +281,23 @@ export default function App() {
   const [generationTitle, setGenerationTitle] = useState('🎉 번호 추첨 완료');
   const [activeGenOption, setActiveGenOption] = useState('OPT_STRICT');
 
-  // 제외수 전용 상태
   const [excludedNumbers, setExcludedNumbers] = useState([]);
 
-  // 용지 마킹 패턴표 토글: [🔴 이번주], [🔵 1주 전], [🟢 2주 전]
+  // 용지 마킹 패턴표 토글
   const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
   const [showPattern1WeekAgo, setShowPattern1WeekAgo] = useState(false);
   const [showPattern2WeeksAgo, setShowPattern2WeeksAgo] = useState(false);
 
+  // 수동 6자리 생성 모달
   const [manualSelectedNumbers, setManualSelectedNumbers] = useState([]);
   const [isManualModalVisible, setIsManualModalVisible] = useState(false);
+
+  // [신규 핵심] 최신 당첨번호 직접 수동 입력 모달 관련 상태
+  const [isManualWinningModalVisible, setIsManualWinningModalVisible] = useState(false);
+  const [inputWinningRound, setInputWinningRound] = useState('');
+  const [inputWinningDate, setInputWinningDate] = useState('');
+  const [inputWinningBalls, setInputWinningBalls] = useState([]);
+  const [inputBonusBall, setInputBonusBall] = useState(null);
 
   const [isGeneratedModalVisible, setIsGeneratedModalVisible] = useState(false);
   const [isExcludeModalVisible, setIsExcludeModalVisible] = useState(false);
@@ -329,33 +323,32 @@ export default function App() {
   const displayed15Rounds = Array.from({ length: 15 }, (_, i) => winningTopRound - i).filter((r) => r >= 1);
   const bottomRound = displayed15Rounds.length > 0 ? displayed15Rounds[displayed15Rounds.length - 1] : winningTopRound;
 
+  // ================= [1차 / 2차 통합 수신 모듈] =================
   const fetchLottoRoundWithFallback = async (drwNo) => {
     const cacheBuster = `?t=${Date.now()}`;
 
-    if (drwNo === calculateCurrentLatestRound()) {
-      try {
-        const resPrimary = await fetch(`${PRIMARY_CDN_LATEST}${cacheBuster}`);
-        if (resPrimary.ok) {
-          const data = await resPrimary.json();
-          if (data && data.returnValue === 'success' && data.drwNo === drwNo) {
-            return {
-              drwNo: data.drwNo,
-              drwNoDate: data.drwNoDate,
-              numbers: [
-                data.drwtNo1,
-                data.drwtNo2,
-                data.drwtNo3,
-                data.drwtNo4,
-                data.drwtNo5,
-                data.drwtNo6,
-              ].sort((a, b) => a - b),
-              bnusNo: data.bnusNo,
-            };
-          }
+    try {
+      const resPrimary = await fetch(`${PRIMARY_CDN_LATEST}${cacheBuster}`);
+      if (resPrimary.ok) {
+        const data = await resPrimary.json();
+        if (data && data.returnValue === 'success' && data.drwNo >= drwNo) {
+          return {
+            drwNo: data.drwNo,
+            drwNoDate: data.drwNoDate,
+            numbers: [
+              data.drwtNo1,
+              data.drwtNo2,
+              data.drwtNo3,
+              data.drwtNo4,
+              data.drwtNo5,
+              data.drwtNo6,
+            ].sort((a, b) => a - b),
+            bnusNo: data.bnusNo,
+          };
         }
-      } catch (e) {
-        console.warn(`[1차 CDN latest 실패] 회차 ${drwNo}, 2차 서버 폴백`);
       }
+    } catch (e) {
+      console.warn(`[1차 CDN 조회 실패] 2차 동행복권 서버로 시도합니다.`);
     }
 
     try {
@@ -367,6 +360,7 @@ export default function App() {
           Accept: 'application/json',
         },
       });
+
       if (!response.ok) return null;
       const data = await response.json();
 
@@ -387,7 +381,7 @@ export default function App() {
       }
       return null;
     } catch (e) {
-      console.log(`[2차 서버 실패] ${drwNo}회차 수신 오류:`, e.message);
+      console.log(`[2차 서버 통신 실패] ${drwNo}회차:`, e.message);
       return null;
     }
   };
@@ -482,7 +476,6 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
-  // 2단계 세이프가드 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -498,7 +491,6 @@ export default function App() {
         }
       }
 
-      // 세이프가드: 총합 100~180 등 기본 뼈대 사수
       attempts = 0;
       while (attempts < 5000) {
         attempts++;
@@ -648,7 +640,7 @@ export default function App() {
     );
   };
 
-  // 공용 정밀 분석 데이터 생성기 (표준 대조 기준 정상화)
+  // 공용 정밀 분석 데이터 생성기
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -1004,26 +996,102 @@ export default function App() {
     }
   };
 
+  // ================= [신규] 수동 당첨번호 입력 모달 핸들러 =================
+  const openManualWinningModal = () => {
+    const nextRound = (latestRound + 1).toString();
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    setInputWinningRound(nextRound);
+    setInputWinningDate(dateStr);
+    setInputWinningBalls([]);
+    setInputBonusBall(null);
+    setIsManualWinningModalVisible(true);
+  };
+
+  const toggleInputWinningBall = (num) => {
+    if (inputWinningBalls.includes(num)) {
+      setInputWinningBalls(inputWinningBalls.filter((n) => n !== num));
+    } else if (inputBonusBall === num) {
+      setInputBonusBall(null);
+    } else {
+      if (inputWinningBalls.length < 6) {
+        setInputWinningBalls([...inputWinningBalls, num].sort((a, b) => a - b));
+      } else if (inputBonusBall === null) {
+        setInputBonusBall(num);
+      } else {
+        Alert.alert('알림', '당첨번호 6개와 보너스번호 1개가 이미 모두 선택되었습니다.');
+      }
+    }
+  };
+
+  const handleSaveManualWinningRound = async () => {
+    const roundNum = parseInt(inputWinningRound.trim(), 10);
+    if (isNaN(roundNum) || roundNum < 1) {
+      Alert.alert('입력 오류', '유효한 회차 번호를 입력해 주세요.');
+      return;
+    }
+    if (inputWinningBalls.length !== 6) {
+      Alert.alert('입력 오류', '당첨번호 6개를 모두 선택해 주세요.');
+      return;
+    }
+    if (inputBonusBall === null) {
+      Alert.alert('입력 오류', '보너스 번호 1개를 선택해 주세요.');
+      return;
+    }
+
+    const newWinningData = {
+      drwNo: roundNum,
+      drwNoDate: inputWinningDate.trim() || calculateDrwDate(roundNum),
+      numbers: [...inputWinningBalls].sort((a, b) => a - b),
+      bnusNo: inputBonusBall,
+      isPending: false,
+    };
+
+    const updatedCache = { ...lottoCache, [roundNum]: newWinningData };
+    setLottoCache(updatedCache);
+
+    if (roundNum >= latestRound) {
+      setLatestRound(roundNum);
+      setWinningTopRound(roundNum);
+    }
+
+    try {
+      await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updatedCache));
+      setIsManualWinningModalVisible(false);
+      Alert.alert('반영 완료', `제 ${roundNum}회 당첨번호가 앱에 성공적으로 수동 등록되었습니다.`);
+    } catch (e) {
+      Alert.alert('저장 실패', '수동 당첨번호를 캐시에 저장하는 중 오류가 발생했습니다.');
+    }
+  };
+
+  // 새로고침 로직
   const handleRefreshLatestRound = async () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
+
     try {
       let calc = calculateCurrentLatestRound();
       let fetched = await fetchLottoRoundWithFallback(calc);
 
       if (!fetched && calc > 1) {
-        calc = calc - 1;
-        fetched = await fetchLottoRoundWithFallback(calc);
+        fetched = await fetchLottoRoundWithFallback(calc - 1);
       }
 
       if (fetched) {
-        setLatestRound(fetched.drwNo);
-        const updated = { ...lottoCache, [fetched.drwNo]: { ...fetched, isPending: false } };
+        const newRound = fetched.drwNo;
+        setLatestRound(newRound);
+        setWinningTopRound(newRound);
+
+        const updated = { ...lottoCache, [newRound]: { ...fetched, isPending: false } };
         setLottoCache(updated);
         await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
-        Alert.alert('동기화 완료', `제 ${fetched.drwNo}회 당첨번호가 반영되었습니다.`);
+
+        Alert.alert('동기화 완료', `제 ${newRound}회 당첨번호가 성공적으로 반영되었습니다.`);
       } else {
-        Alert.alert('안내', '최신 당첨번호를 확인했습니다.');
+        Alert.alert(
+          '갱신 안내',
+          '현재 동행복권 서버에 최신 추첨 결과가 아직 등록되지 않았습니다. 우측 [✏️ 수동] 버튼으로 즉시 직접 등록할 수도 있습니다.'
+        );
       }
     } catch (e) {
       Alert.alert('네트워크 안내', '인터넷 연결 상태를 확인해 주세요.');
@@ -1894,7 +1962,6 @@ export default function App() {
       >
         <View style={styles.centerModalOverlay}>
           <View style={styles.excludePopupBox}>
-            {/* 단일 상단 헤더 */}
             <View style={styles.excludeHeaderBox}>
               <Text style={styles.excludeHeaderTitle}>🚫 제외수 설정 (10대 알고리즘)</Text>
               <TouchableOpacity
@@ -1914,7 +1981,6 @@ export default function App() {
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 490 }}>
               <View style={styles.smartFormulaPanel}>
-                {/* 10대 알고리즘 종합 12개 자동 도출 버튼 */}
                 <TouchableOpacity
                   style={styles.smartAuto12Btn}
                   onPress={applySmart10AlgorithmSet}
@@ -1930,7 +1996,6 @@ export default function App() {
                   📋 10가지 제외 알고리즘 개별 실행 (터치 시 즉시 제외수 등록):
                 </Text>
 
-                {/* 10대 알고리즘 버튼 그리드 */}
                 <View style={styles.algoButtonsGrid}>
                   <TouchableOpacity
                     style={styles.algoGridBtn}
@@ -2089,7 +2154,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 5] 직접 번호 생성(수동 선택) 모달 */}
+      {/* [모달 5] 직접 번호 생성(수동 6개 선택) 모달 */}
       <Modal
         visible={isManualModalVisible}
         animationType="fade"
@@ -2171,6 +2236,134 @@ export default function App() {
         </View>
       </Modal>
 
+      {/* [신규 핵심 모달] 최신 당첨번호 수동 직접 입력 및 저장 모달 */}
+      <Modal
+        visible={isManualWinningModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsManualWinningModalVisible(false)}
+      >
+        <View style={styles.centerModalOverlay}>
+          <View style={[styles.excludePopupBox, { maxHeight: '92%' }]}>
+            <View style={[styles.excludeHeaderBox, { backgroundColor: '#1e3a8a' }]}>
+              <Text style={[styles.excludeHeaderTitle, { color: '#ffffff' }]}>✏️ 최신 당첨번호 수동 등록</Text>
+              <TouchableOpacity
+                onPress={() => setIsManualWinningModalVisible(false)}
+                style={styles.excludeCloseTouch}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text style={[styles.excludeCloseX, { color: '#ffffff' }]}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.manualWinningInputForm}>
+              <View style={styles.manualWinningInputRow}>
+                <Text style={styles.manualWinningInputLabel}>회차:</Text>
+                <TextInput
+                  style={styles.manualWinningTextInput}
+                  value={inputWinningRound}
+                  onChangeText={setInputWinningRound}
+                  keyboardType="number-pad"
+                  placeholder="예: 1249"
+                />
+                <Text style={[styles.manualWinningInputLabel, { marginLeft: 10 }]}>일자:</Text>
+                <TextInput
+                  style={[styles.manualWinningTextInput, { flex: 1.5 }]}
+                  value={inputWinningDate}
+                  onChangeText={setInputWinningDate}
+                  placeholder="YYYY-MM-DD"
+                />
+              </View>
+
+              <View style={styles.manualWinningSelectionDisplay}>
+                <Text style={styles.manualWinningSelectionTitle}>
+                  당첨번호 6개 + 보너스 1개 선택:
+                </Text>
+                <View style={styles.manualWinningBallsPreviewRow}>
+                  {inputWinningBalls.map((n) => (
+                    <View key={`in-win-${n}`} style={[styles.manualSelectedMiniBall, { backgroundColor: getBallColor(n) }]}>
+                      <Text style={styles.manualSelectedMiniBallText}>{n}</Text>
+                    </View>
+                  ))}
+                  {Array.from({ length: 6 - inputWinningBalls.length }).map((_, i) => (
+                    <View key={`empty-win-${i}`} style={styles.manualEmptyBallSlot}>
+                      <Text style={styles.manualEmptyBallText}>?</Text>
+                    </View>
+                  ))}
+                  <Text style={styles.manualWinningPlusText}>+</Text>
+                  {inputBonusBall ? (
+                    <View style={[styles.manualSelectedMiniBall, { backgroundColor: getBallColor(inputBonusBall) }]}>
+                      <Text style={styles.manualSelectedMiniBallText}>{inputBonusBall}</Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.manualEmptyBallSlot, { borderColor: '#f59e0b' }]}>
+                      <Text style={[styles.manualEmptyBallText, { color: '#f59e0b' }]}>B</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.manualWinningGuideSub}>
+                  * 1~6번째 터치: 당첨번호 / 7번째 터치: 보너스 번호
+                </Text>
+              </View>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 280 }}>
+              <View style={styles.excludeBallWrapper}>
+                {allNumbers.map((num) => {
+                  const isMain = inputWinningBalls.includes(num);
+                  const isBonus = inputBonusBall === num;
+
+                  return (
+                    <TouchableOpacity
+                      key={`manual-win-ball-${num}`}
+                      style={[
+                        styles.standardLottoBall,
+                        { backgroundColor: getBallColor(num) },
+                        (isMain || isBonus) && styles.manualLottoBallSelected,
+                      ]}
+                      onPress={() => toggleInputWinningBall(num)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.standardLottoBallText}>{num}</Text>
+                      {isMain && (
+                        <View style={styles.manualSelectedBadge}>
+                          <Text style={styles.manualSelectedBadgeCheck}>✓</Text>
+                        </View>
+                      )}
+                      {isBonus && (
+                        <View style={[styles.manualSelectedBadge, { backgroundColor: '#f59e0b' }]}>
+                          <Text style={styles.manualSelectedBadgeCheck}>B</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </ScrollView>
+
+            <View style={styles.excludePopupBtnRow}>
+              <TouchableOpacity
+                style={[styles.excludeConfirmOrangeBtn, { backgroundColor: '#1d4ed8' }]}
+                onPress={handleSaveManualWinningRound}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnTextWhiteBold}>당첨번호 저장 및 반영</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.excludeResetBlueBtn, { backgroundColor: '#64748b' }]}
+                onPress={() => {
+                  setInputWinningBalls([]);
+                  setInputBonusBall(null);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnTextWhiteBold}>번호초기화</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* [모달 6] 전회차 당첨결과 모달 (전체화면) */}
       <Modal
         visible={isWinningModalVisible}
@@ -2185,13 +2378,21 @@ export default function App() {
               <Text style={styles.modalSubtitle}>실시간 자동 폴백 & 로컬 캐싱 지원</Text>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <TouchableOpacity
+                style={styles.manualWinningTopBtn}
+                onPress={openManualWinningModal}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.manualWinningTopBtnText}>✏️ 수동</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity
                 style={styles.naverTopIntegratedBtn}
                 onPress={() => openInNaverSearch(winningTopRound)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.naverTopIntegratedBtnText}>📍 1등 판매점</Text>
+                <Text style={styles.naverTopIntegratedBtnText}>📍 판매점</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -2485,7 +2686,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 2. 저장번호 바로 아래에 로또 용지 마킹 패턴표 배치 */}
+                {/* 2. 로또 용지 마킹 패턴표 */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
@@ -2660,7 +2861,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 4. 특수수 및 핵심 패턴 심층 지표 (누적 당첨 횟수 위 배치) */}
+                {/* 4. 특수수 및 핵심 패턴 심층 지표 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🔍 특수수 및 핵심 패턴 심층 지표
@@ -2838,7 +3039,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 8] QR 코드 스캐너 모달 (세로 모드 고정 및 카메라 회전 방지) */}
+      {/* [모달 8] QR 코드 스캐너 모달 (세로 고정 및 카메라 프리뷰 회전 방지) */}
       <Modal
         visible={isCameraModalVisible}
         animationType="fade"
@@ -2926,7 +3127,7 @@ export default function App() {
                     </View>
                   ))}
                   <Text style={styles.refPlus}>+</Text>
-                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(latestWinningInfo.bnusNo) }]}>
+                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(qrResultData.winningInfo.bnusNo) }]}>
                     <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : qrResultData.winningInfo.bnusNo}</Text>
                   </View>
                 </View>
@@ -3106,9 +3307,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  manualWinningTopBtn: {
+    backgroundColor: '#1e3a8a',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+    elevation: 1,
+  },
+  manualWinningTopBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
   naverTopIntegratedBtn: {
     backgroundColor: '#03c75a',
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 6,
     elevation: 1,
@@ -3361,7 +3574,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     elevation: 10,
   },
-
   excludeHeaderBox: {
     backgroundColor: '#d1d5db',
     paddingVertical: 12,
@@ -3600,6 +3812,77 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '900',
   },
+
+  // 수동 당첨번호 입력 모달 전용 스타일
+  manualWinningInputForm: {
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  manualWinningInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  manualWinningInputLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#334155',
+    marginRight: 6,
+  },
+  manualWinningTextInput: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 12,
+    flex: 1,
+  },
+  manualWinningSelectionDisplay: {
+    marginTop: 4,
+  },
+  manualWinningSelectionTitle: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 6,
+  },
+  manualWinningBallsPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  manualEmptyBallSlot: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  manualEmptyBallText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  manualWinningPlusText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#64748b',
+    marginHorizontal: 2,
+  },
+  manualWinningGuideSub: {
+    fontSize: 9.5,
+    color: '#64748b',
+    marginTop: 6,
+  },
+
   oppositeActionBtn: {
     backgroundColor: '#8b5cf6',
     paddingVertical: 11,
