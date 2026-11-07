@@ -290,6 +290,7 @@ export default function App() {
   const [manualSelectedNumbers, setManualSelectedNumbers] = useState([]);
   const [isManualModalVisible, setIsManualModalVisible] = useState(false);
 
+  // 최신 당첨번호 수동 입력 모달 관련 상태
   const [isManualWinningModalVisible, setIsManualWinningModalVisible] = useState(false);
   const [inputWinningRound, setInputWinningRound] = useState('');
   const [inputWinningDate, setInputWinningDate] = useState('');
@@ -473,6 +474,7 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
+  // 2단계 세이프가드 번호 생성기
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
@@ -510,23 +512,7 @@ export default function App() {
     [getDynamicContextData]
   );
 
-  // 임의의 두 번호 (a, b)의 역대 누적 동반 출현 횟수 조회 헬퍼
-  const getPairMatchCount = useCallback(
-    (num1, num2) => {
-      let count = 0;
-      for (let r = 1; r <= latestRound; r++) {
-        const rData = getLottoNumbersByRound(r);
-        if (rData && rData.numbers && !rData.isPending) {
-          if (rData.numbers.includes(num1) && rData.numbers.includes(num2)) {
-            count++;
-          }
-        }
-      }
-      return count;
-    },
-    [latestRound, getLottoNumbersByRound]
-  );
-
+  // 10대 제외 예측 알고리즘 분석 모듈
   const get10ExclusionAnalytics = useCallback(() => {
     const round0 = getLottoNumbersByRound(latestRound)?.numbers || [];
     const round1 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : [];
@@ -653,125 +639,23 @@ export default function App() {
     );
   };
 
-  // ================= [신규 핵심] 10회 미만 2수 궁합 배제 & 대체 수 교체 보정기 =================
-  const optimizeGameByPairCompatibility = (targetNumbers, targetIndex) => {
-    const flatList = getFlatSavedGames();
-    if (targetIndex < 0 || targetIndex >= flatList.length) return;
-    const targetSaved = flatList[targetIndex];
-
-    const currentNums = [...targetNumbers].sort((a, b) => a - b);
-    const badPairs = [];
-    const badNumCount = {};
-    currentNums.forEach((n) => (badNumCount[n] = 0));
-
-    // 15개 2수 조합의 역대 동반 출현 조사
-    for (let i = 0; i < currentNums.length; i++) {
-      for (let j = i + 1; j < currentNums.length; j++) {
-        const n1 = currentNums[i];
-        const n2 = currentNums[j];
-        const count = getPairMatchCount(n1, n2);
-        if (count < 10) {
-          badPairs.push({ n1, n2, count });
-          badNumCount[n1]++;
-          badNumCount[n2]++;
+  // =================================================================
+  // [신규 핵심] 역대 2수 동반출현 매트릭스 계산기
+  // =================================================================
+  const getPairOccurrences = useCallback((n1, n2) => {
+    let count = 0;
+    for (let r = 1; r <= latestRound; r++) {
+      const rData = getLottoNumbersByRound(r);
+      if (rData && rData.numbers && !rData.isPending) {
+        if (rData.numbers.includes(n1) && rData.numbers.includes(n2)) {
+          count++;
         }
       }
     }
+    return count;
+  }, [latestRound, getLottoNumbersByRound]);
 
-    if (badPairs.length === 0) {
-      Alert.alert('완벽한 궁합 확인', '현재 6개 번호의 모든 2수 조합은 역대 10회 이상 동반 출현한 황금 케미 조합입니다. 교체할 필요가 없습니다.');
-      return;
-    }
-
-    // 10회 미만 상극을 가장 많이 유발하는 번호 선정
-    let worstNum = currentNums[0];
-    let maxBad = -1;
-    currentNums.forEach((num) => {
-      if (badNumCount[num] > maxBad) {
-        maxBad = badNumCount[num];
-        worstNum = num;
-      }
-    });
-
-    const remain5 = currentNums.filter((n) => n !== worstNum);
-
-    // 1~45 중 남은 5개 번호와 모두 10회 이상 함께 출현하고 합계 점수가 가장 높은 대체수 탐색
-    let bestCandidate = null;
-    let highestScore = -1;
-
-    for (let c = 1; c <= 45; c++) {
-      if (remain5.includes(c) || c === worstNum || excludedNumbers.includes(c)) continue;
-
-      let isValidCandidate = true;
-      let totalMatchScore = 0;
-
-      for (const baseNum of remain5) {
-        const matchCnt = getPairMatchCount(c, baseNum);
-        if (matchCnt < 10) {
-          isValidCandidate = false;
-          break;
-        }
-        totalMatchScore += matchCnt;
-      }
-
-      if (isValidCandidate && totalMatchScore > highestScore) {
-        highestScore = totalMatchScore;
-        bestCandidate = c;
-      }
-    }
-
-    if (!bestCandidate) {
-      Alert.alert('대체수 탐색 알림', '남은 5개 번호와 모두 10회 이상 동반 출현하는 대체 번호를 찾지 못했습니다. 제외수를 일부 해제 후 다시 시도해 주세요.');
-      return;
-    }
-
-    const optimizedNumbers = [...remain5, bestCandidate].sort((a, b) => a - b);
-    const relatedBadPair = badPairs.find((p) => p.n1 === worstNum || p.n2 === worstNum);
-    const otherBadNum = relatedBadPair.n1 === worstNum ? relatedBadPair.n2 : relatedBadPair.n1;
-
-    Alert.alert(
-      '🤝 케미 번호 교체 보정 제안',
-      `[${worstNum}번]은 [${otherBadNum}번]과 역대 ${relatedBadPair.count}회만 출현(10회 미만 상극)했습니다.\n\n기존 5개 번호와 최상의 궁합(모두 10회↑ 출현)을 자랑하는 [${bestCandidate}번]으로 교체하시겠습니까?`,
-      [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '교체 적용',
-          onPress: async () => {
-            try {
-              const updatedSets = savedSets.map((item) => {
-                if (item.id === targetSaved.id) {
-                  const newGames = [...item.games];
-                  newGames[targetSaved.gIdx] = optimizedNumbers;
-                  return { ...item, games: newGames };
-                }
-                return item;
-              });
-
-              setSavedSets(updatedSets);
-              await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedSets));
-
-              const newAnalysis = calculateNumbersAnalysis(
-                optimizedNumbers,
-                latestRound,
-                `저장 번호 정밀 분석 (${targetSaved.gameLabel})`,
-                `저장일시: ${targetSaved.date} | 최신 제${latestRound}회 공식 기준 심층 분석`,
-                null,
-                'SAVED',
-                targetIndex
-              );
-              setAnalysisTargetData(newAnalysis);
-
-              Alert.alert('보정 완료', `성공적으로 번호가 교체되었습니다!\n\n수정 번호: [${optimizedNumbers.join(', ')}]`);
-            } catch (err) {
-              Alert.alert('오류', '번호를 보정하여 저장하는 중 문제가 발생했습니다.');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  // 공용 정밀 분석 데이터 생성기 (TOP 20 동반 출현 산출)
+  // 공용 정밀 분석 데이터 생성기 (2수 궁합 10회 미만 판정 및 TOP 20 산출 탑재)
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -842,47 +726,38 @@ export default function App() {
         absenceWeeks[n] = count;
       });
 
-      // 6개 번호와 1~45 전체 번호 간의 동반 출현 빈도 전수 계산 (TOP 20 추출)
-      const companionCounts = {};
+      // 6개 번호 간 모든 2수 조합(15개) 및 역대 동반출현 횟수 계산
+      const currentPairs = [];
+      const lowAffinityPairs = []; // 10회 미만 출현한 불협화음 2수 조합
+
       for (let i = 0; i < nums.length; i++) {
         for (let j = i + 1; j < nums.length; j++) {
           const n1 = nums[i];
           const n2 = nums[j];
-          const key = `${n1}-${n2}`;
-          companionCounts[key] = { n1, n2, count: 0, isInternal: true };
-        }
-      }
-
-      // 외부 케미 번호와의 페어링도 포함하여 대상 번호들의 최강 듀오 TOP 20 도출
-      for (let i = 0; i < nums.length; i++) {
-        for (let other = 1; other <= 45; other++) {
-          if (nums[i] === other) continue;
-          const n1 = Math.min(nums[i], other);
-          const n2 = Math.max(nums[i], other);
-          const key = `${n1}-${n2}`;
-          if (!companionCounts[key]) {
-            companionCounts[key] = { n1, n2, count: 0, isInternal: numSet.has(other) };
+          const count = getPairOccurrences(n1, n2);
+          const pairObj = { n1, n2, count };
+          currentPairs.push(pairObj);
+          if (count < 10) {
+            lowAffinityPairs.push(pairObj);
           }
         }
       }
 
-      for (let r = 1; r <= latestRound; r++) {
-        const rData = getLottoNumbersByRound(r);
-        if (rData && rData.numbers && !rData.isPending) {
-          const rSet = new Set(rData.numbers);
-          Object.keys(companionCounts).forEach((key) => {
-            const pair = companionCounts[key];
-            if (rSet.has(pair.n1) && rSet.has(pair.n2)) {
-              pair.count++;
-            }
-          });
+      // 6개 번호의 15개 2수 조합 내림차순 정렬
+      const sortedCurrentPairs = [...currentPairs].sort((a, b) => b.count - a.count);
+
+      // [신규] 6개 번호와 1~45 전체 번호 간 역대 동반출현 조합 TOP 20 랭킹 산출
+      const allPossiblePairs = [];
+      for (let i = 0; i < nums.length; i++) {
+        const n1 = nums[i];
+        for (let n2 = 1; n2 <= 45; n2++) {
+          if (n1 < n2) {
+            const count = getPairOccurrences(n1, n2);
+            allPossiblePairs.push({ n1, n2, count });
+          }
         }
       }
-
-      // [신규 핵심] 동반 출현 횟수 TOP 20 추출
-      const top20Pairs = Object.values(companionCounts)
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 20);
+      const top20Pairs = allPossiblePairs.sort((a, b) => b.count - a.count).slice(0, 20);
 
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
@@ -939,6 +814,8 @@ export default function App() {
         carryOverNumbers,
         recent30Counts,
         absenceWeeks,
+        currentPairs: sortedCurrentPairs,
+        lowAffinityPairs,
         top20Pairs,
         rowCounts,
         colCounts,
@@ -957,7 +834,7 @@ export default function App() {
         coldNumbersInSet,
       };
     },
-    [latestRound, getLottoNumbersByRound]
+    [latestRound, getLottoNumbersByRound, getPairOccurrences]
   );
 
   const getFlatSavedGames = useCallback(() => {
@@ -976,6 +853,140 @@ export default function App() {
     });
     return flat;
   }, [savedSets, gameLabels]);
+
+  // =================================================================
+  // [신규 핵심] 10회 미만 궁합 번호 배제 및 최적 대체수 교체 알고리즘
+  // =================================================================
+  const optimizeChemistrySet = useCallback(
+    async (currentNumbers, sourceIndex = null, isSaved = false) => {
+      if (!currentNumbers || currentNumbers.length !== 6) return;
+
+      const nums = [...currentNumbers].sort((a, b) => a - b);
+      const lowPairs = [];
+
+      for (let i = 0; i < nums.length; i++) {
+        for (let j = i + 1; j < nums.length; j++) {
+          const count = getPairOccurrences(nums[i], nums[j]);
+          if (count < 10) {
+            lowPairs.push({ n1: nums[i], n2: nums[j], count });
+          }
+        }
+      }
+
+      if (lowPairs.length === 0) {
+        Alert.alert('궁합 우수', '현재 6개 번호 간 모든 2수 조합이 역대 10회 이상 함께 출현한 우수한 궁합입니다!');
+        return;
+      }
+
+      // 상극 조합에 걸린 번호들 중, 전체 번호와의 동반출현 합산 빈도가 가장 낮은 교체 대상 번호(weakestNum) 탐색
+      const numScores = {};
+      nums.forEach((n) => (numScores[n] = 0));
+      nums.forEach((n1) => {
+        nums.forEach((n2) => {
+          if (n1 !== n2) {
+            numScores[n1] += getPairOccurrences(n1, n2);
+          }
+        });
+      });
+
+      // 10회 미만 쌍에 포함된 번호들 중 가장 점수가 낮은 번호 선정
+      const lowNumbersSet = new Set();
+      lowPairs.forEach((p) => {
+        lowNumbersSet.add(p.n1);
+        lowNumbersSet.add(p.n2);
+      });
+
+      const lowNumbersArray = Array.from(lowNumbersSet);
+      lowNumbersArray.sort((a, b) => numScores[a] - numScores[b]);
+      const replaceTargetNum = lowNumbersArray[0]; // 교체될 상극 번호
+
+      const remain5 = nums.filter((n) => n !== replaceTargetNum);
+
+      // 남은 5개 번호와 동반출현 합산 점수가 가장 높으면서 모든 5개 번호와 각각 10회 이상 출현하는 최적의 대체 번호 탐색
+      const availableCandidates = allNumbers.filter(
+        (n) => !nums.includes(n) && !excludedNumbers.includes(n)
+      );
+
+      let bestReplacement = null;
+      let maxAffinityScore = -1;
+
+      for (const candidate of availableCandidates) {
+        let isValidWithAll = true;
+        let sumScore = 0;
+
+        for (const fixedNum of remain5) {
+          const pairCount = getPairOccurrences(fixedNum, candidate);
+          if (pairCount < 10) {
+            isValidWithAll = false;
+            break;
+          }
+          sumScore += pairCount;
+        }
+
+        if (isValidWithAll && sumScore > maxAffinityScore) {
+          maxAffinityScore = sumScore;
+          bestReplacement = candidate;
+        }
+      }
+
+      if (!bestReplacement) {
+        // 남은 5개 번호 모두와 10회 이상인 번호가 없다면, 합산 출현 횟수가 가장 높은 최선의 번호 선택
+        for (const candidate of availableCandidates) {
+          let sumScore = 0;
+          for (const fixedNum of remain5) {
+            sumScore += getPairOccurrences(fixedNum, candidate);
+          }
+          if (sumScore > maxAffinityScore) {
+            maxAffinityScore = sumScore;
+            bestReplacement = candidate;
+          }
+        }
+      }
+
+      const optimizedSet = [...remain5, bestReplacement].sort((a, b) => a - b);
+
+      Alert.alert(
+        '2수 궁합 최적화 완료',
+        `상극 번호: [${replaceTargetNum}번] 배제\n최적 대체수: [${bestReplacement}번] 교체 추천\n\n기존: [${nums.join(', ')}]\n➔ 교체: [${optimizedSet.join(', ')}]\n\n이 번호로 즉시 반영하시겠습니까?`,
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '반영하기',
+            onPress: async () => {
+              if (isSaved && sourceIndex !== null) {
+                const flatList = getFlatSavedGames();
+                const target = flatList[sourceIndex];
+                if (target) {
+                  const updatedSets = savedSets.map((item) => {
+                    if (item.id === target.id) {
+                      const updatedGames = item.games.map((g, idx) => (idx === target.gIdx ? optimizedSet : g));
+                      return { ...item, games: updatedGames };
+                    }
+                    return item;
+                  });
+                  setSavedSets(updatedSets);
+                  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedSets));
+                }
+              }
+
+              // 정밀 분석 창 리로드
+              const updatedAnalysis = calculateNumbersAnalysis(
+                optimizedSet,
+                latestRound,
+                isSaved ? `저장 번호 정밀 분석 (궁합 최적화)` : `정밀 분석 결과 (궁합 최적화)`,
+                `상극 [${replaceTargetNum}번] ➔ 최적 궁합 [${bestReplacement}번] 교체 적용`,
+                null,
+                analysisTargetData?.sourceType,
+                sourceIndex
+              );
+              setAnalysisTargetData(updatedAnalysis);
+            },
+          },
+        ]
+      );
+    },
+    [allNumbers, excludedNumbers, getPairOccurrences, savedSets, getFlatSavedGames, calculateNumbersAnalysis, latestRound, analysisTargetData]
+  );
 
   const handleDeleteGameFromAnalysis = (targetIndex) => {
     const flatList = getFlatSavedGames();
@@ -2745,7 +2756,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 (TOP 20 동반 출현 & 상극 케미 보정 탑재) */}
+      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 (2수 궁합 10회 미만 배제/대체 및 TOP 20 랭킹) */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -2818,7 +2829,6 @@ export default function App() {
               </View>
             )}
 
-            {/* 저장번호 정밀분석: 삭제 버튼 및 상극 케미 보정 버튼 탑재 */}
             {analysisTargetData?.sourceType === 'SAVED' && (
               <View style={styles.analysisNavSubBar}>
                 <TouchableOpacity
@@ -2837,7 +2847,7 @@ export default function App() {
                       analysisTargetData.sourceIndex <= 0 && styles.analysisNavBtnTextDisabled,
                     ]}
                   >
-                    ◀ 이전
+                    ◀ 이전 번호
                   </Text>
                 </TouchableOpacity>
 
@@ -2873,7 +2883,7 @@ export default function App() {
                       analysisTargetData.sourceIndex >= getFlatSavedGames().length - 1 && styles.analysisNavBtnTextDisabled,
                     ]}
                   >
-                    다음 ▶
+                    다음 번호 ▶
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -2900,23 +2910,69 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* [신규 핵심] 저장번호 화면 전용: 10회 미만 상극 2수 자동 교체 스마트 보정 버튼 */}
-                {analysisTargetData.sourceType === 'SAVED' && (
-                  <TouchableOpacity
-                    style={styles.optimizeCompatibilityBannerBtn}
-                    onPress={() => optimizeGameByPairCompatibility(analysisTargetData.numbers, analysisTargetData.sourceIndex)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.optimizeCompatibilityBannerBtnTitle}>
-                      ⚡ 2수 궁합 대조 (10회 미만 상극 배제 및 대체수 보정)
+                {/* [신규 핵심] 2수 궁합 진단 & 10회 미만 배제 대체수 교체 패널 */}
+                <View style={styles.chemistryActionCard}>
+                  <View style={styles.chemistryActionHeader}>
+                    <Text style={styles.chemistryActionTitle}>
+                      🤝 2수 궁합 진단 및 대체 추천수 엔진
                     </Text>
-                    <Text style={styles.optimizeCompatibilityBannerBtnSub}>
-                      6개 번호 중 10회 미만 출현한 짝을 찾아 최고 케미 번호로 1:1 교체 ➔
-                    </Text>
-                  </TouchableOpacity>
-                )}
+                    {analysisTargetData.lowAffinityPairs.length > 0 ? (
+                      <View style={styles.lowAffinityWarningBadge}>
+                        <Text style={styles.lowAffinityWarningText}>
+                          ⚠️ 10회 미만 궁합 {analysisTargetData.lowAffinityPairs.length}쌍 감지
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={styles.goodAffinityBadge}>
+                        <Text style={styles.goodAffinityText}>
+                          ✅ 전수 10회 이상 황금 궁합
+                        </Text>
+                      </View>
+                    )}
+                  </View>
 
-                {/* 2. 로또 용지 마킹 패턴표 */}
+                  {analysisTargetData.lowAffinityPairs.length > 0 ? (
+                    <View style={styles.lowAffinityDetailsBox}>
+                      <Text style={styles.lowAffinityDetailsTitle}>
+                        역대 함께 나온 횟수가 10회 미만인 상극 조합:
+                      </Text>
+                      <View style={styles.lowPairsTagsRow}>
+                        {analysisTargetData.lowAffinityPairs.map((p, idx) => (
+                          <View key={`low-p-${idx}`} style={styles.lowPairTag}>
+                            <Text style={styles.lowPairTagText}>
+                              [{p.n1} + {p.n2}] ({p.count}회)
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+
+                      <TouchableOpacity
+                        style={styles.optimizeChemistryBtn}
+                        onPress={() =>
+                          optimizeChemistrySet(
+                            analysisTargetData.numbers,
+                            analysisTargetData.sourceIndex,
+                            analysisTargetData.sourceType === 'SAVED'
+                          )
+                        }
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.optimizeChemistryBtnTitle}>
+                          ⚡ 10회 미만 상극수 배제 & 최적 궁합수로 교체
+                        </Text>
+                        <Text style={styles.optimizeChemistryBtnSub}>
+                          (남은 5개 번호와 역대 동반출현 최다 번호로 자동 치환)
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <Text style={styles.goodAffinityDesc}>
+                      현재 6개 번호의 모든 2수 조합(15쌍)이 역대 10회 이상 꾸준히 동반 출현한 최상의 케미스트리를 유지하고 있습니다.
+                    </Text>
+                  )}
+                </View>
+
+                {/* 2. 저장번호 바로 아래에 로또 용지 마킹 패턴표 배치 */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
@@ -3207,7 +3263,75 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 6. 번호별 최근 30회 빈도 및 직전 미출현 주기 */}
+                {/* 6. [대폭 확장] 현재 번호간 & 연계 번호 동반출현 TOP 20 랭킹 전체 출력 */}
+                <View style={styles.analysisSectionCard}>
+                  <View style={styles.slipCardHeader}>
+                    <Text style={styles.analysisSectionTitle}>
+                      🤝 역대 2수 동반 출현 횟수 TOP 20 랭킹
+                    </Text>
+                    <Text style={styles.slipSubDesc}>
+                      현재 번호와 연계된 역대 최다 동반출현 2수 조합 (1위~20위 순위)
+                    </Text>
+                  </View>
+
+                  <ScrollView nestedScrollEnabled={true} style={{ maxHeight: 380 }}>
+                    {analysisTargetData.top20Pairs.map((p, idx) => {
+                      const isBothInCurrent =
+                        analysisTargetData.numbers.includes(p.n1) &&
+                        analysisTargetData.numbers.includes(p.n2);
+
+                      return (
+                        <View
+                          key={`pair-rank-${idx}`}
+                          style={[
+                            styles.top20PairItem,
+                            isBothInCurrent && styles.top20PairItemCurrentHighlight,
+                          ]}
+                        >
+                          <View style={styles.top20RankBadgeBox}>
+                            <Text
+                              style={[
+                                styles.top20RankText,
+                                idx < 3 && styles.top20RankTextGold,
+                              ]}
+                            >
+                              {idx + 1}위
+                            </Text>
+                          </View>
+
+                          <View style={styles.top20BallsPairGroup}>
+                            <View style={[styles.microBall, { backgroundColor: getBallColor(p.n1) }]}>
+                              <Text style={styles.microBallText}>{p.n1}</Text>
+                            </View>
+                            <Text style={styles.top20PairPlus}>+</Text>
+                            <View style={[styles.microBall, { backgroundColor: getBallColor(p.n2) }]}>
+                              <Text style={styles.microBallText}>{p.n2}</Text>
+                            </View>
+                            {isBothInCurrent && (
+                              <View style={styles.currentPairTagBadge}>
+                                <Text style={styles.currentPairTagBadgeText}>현재 조합</Text>
+                              </View>
+                            )}
+                          </View>
+
+                          <View style={styles.top20CountGroup}>
+                            <Text style={styles.top20CountLabel}>역대 동반:</Text>
+                            <Text
+                              style={[
+                                styles.top20CountNumber,
+                                p.count < 10 ? styles.top20CountRed : styles.top20CountBlue,
+                              ]}
+                            >
+                              {p.count}회
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
+                {/* 7. 번호별 최근 30회 빈도 및 직전 미출현 주기 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     📈 번호별 최근 30회 빈도 및 미출현 주기 ({analysisTargetData.sourceType === 'WINNING' ? `제${analysisTargetData.sourceIndex}회 기준` : `최신 제${latestRound}회 기준`})
@@ -3234,59 +3358,6 @@ export default function App() {
                       </Text>
                     </View>
                   ))}
-                </View>
-
-                {/* 7. [확장] 번호간 동반 출현 횟수 TOP 20 랭킹 대시보드 */}
-                <View style={styles.analysisSectionCard}>
-                  <View style={styles.top20HeaderRow}>
-                    <Text style={styles.analysisSectionTitle}>
-                      🤝 번호간 동반 출현 횟수 TOP 20 (케미 순위)
-                    </Text>
-                    <Text style={styles.top20SubLabel}>역대 최다 동반 당첨 조합</Text>
-                  </View>
-
-                  <View style={styles.top20ListWrapper}>
-                    {analysisTargetData.top20Pairs.map((p, idx) => {
-                      const isGold = idx === 0;
-                      const isSilver = idx === 1;
-                      const isBronze = idx === 2;
-
-                      return (
-                        <View key={`pair-top20-${idx}`} style={[styles.pairRow, (isGold || isSilver || isBronze) && styles.pairRowTop3]}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            <View style={[
-                              styles.pairRankBadgeBox,
-                              isGold && styles.badgeGold,
-                              isSilver && styles.badgeSilver,
-                              isBronze && styles.badgeBronze,
-                            ]}>
-                              <Text style={styles.pairRankBadgeNum}>{idx + 1}위</Text>
-                            </View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                              <View style={[styles.microBall, { backgroundColor: getBallColor(p.n1) }]}>
-                                <Text style={styles.microBallText}>{p.n1}</Text>
-                              </View>
-                              <Text style={{ fontWeight: 'bold', color: '#94a3b8', fontSize: 11 }}>+</Text>
-                              <View style={[styles.microBall, { backgroundColor: getBallColor(p.n2) }]}>
-                                <Text style={styles.microBallText}>{p.n2}</Text>
-                              </View>
-                            </View>
-                          </View>
-
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            {p.count < 10 && (
-                              <View style={styles.warningUnder10Badge}>
-                                <Text style={styles.warningUnder10Text}>10회 미만</Text>
-                              </View>
-                            )}
-                            <Text style={styles.pairCountText}>
-                              누적 <Text style={{ color: p.count >= 10 ? '#2563eb' : '#dc2626', fontWeight: '900', fontSize: 13 }}>{p.count}회</Text>
-                            </Text>
-                          </View>
-                        </View>
-                      );
-                    })}
-                  </View>
                 </View>
               </ScrollView>
             )}
@@ -3386,7 +3457,7 @@ export default function App() {
                     </View>
                   ))}
                   <Text style={styles.refPlus}>+</Text>
-                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(qrResultData.winningInfo.bnusNo) }]}>
+                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(latestWinningInfo.bnusNo) }]}>
                     <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : qrResultData.winningInfo.bnusNo}</Text>
                   </View>
                 </View>
@@ -3704,30 +3775,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#dc2626',
-  },
-
-  optimizeCompatibilityBannerBtn: {
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1.5,
-    borderColor: '#86efac',
-    borderRadius: 10,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    marginBottom: 10,
-    elevation: 1,
-  },
-  optimizeCompatibilityBannerBtnTitle: {
-    fontSize: 12.5,
-    fontWeight: '900',
-    color: '#15803d',
-    textAlign: 'center',
-  },
-  optimizeCompatibilityBannerBtnSub: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#166534',
-    textAlign: 'center',
-    marginTop: 2,
   },
 
   manualTopOptionBtn: {
@@ -4163,6 +4210,181 @@ const styles = StyleSheet.create({
     fontSize: 9.5,
     color: '#64748b',
     marginTop: 6,
+  },
+
+  // 2수 궁합 및 최적화 카드 스타일
+  chemistryActionCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  chemistryActionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  chemistryActionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1e293b',
+    flex: 1,
+  },
+  lowAffinityWarningBadge: {
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  lowAffinityWarningText: {
+    color: '#b91c1c',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  goodAffinityBadge: {
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  goodAffinityText: {
+    color: '#15803d',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  goodAffinityDesc: {
+    fontSize: 11,
+    color: '#475569',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  lowAffinityDetailsBox: {
+    marginTop: 4,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  lowAffinityDetailsTitle: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  lowPairsTagsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginBottom: 8,
+  },
+  lowPairTag: {
+    backgroundColor: '#fee2e2',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  lowPairTagText: {
+    color: '#dc2626',
+    fontSize: 10.5,
+    fontWeight: '800',
+  },
+  optimizeChemistryBtn: {
+    backgroundColor: '#059669',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    elevation: 2,
+  },
+  optimizeChemistryBtnTitle: {
+    color: '#ffffff',
+    fontSize: 12.5,
+    fontWeight: '900',
+  },
+  optimizeChemistryBtnSub: {
+    color: '#d1fae5',
+    fontSize: 9.5,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+
+  // TOP 20 동반출현 리스트 아이템 스타일
+  top20PairItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 4,
+  },
+  top20PairItemCurrentHighlight: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#93c5fd',
+  },
+  top20RankBadgeBox: {
+    width: 32,
+  },
+  top20RankText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+  },
+  top20RankTextGold: {
+    color: '#d97706',
+    fontWeight: '900',
+  },
+  top20BallsPairGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flex: 1,
+    marginLeft: 4,
+  },
+  top20PairPlus: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontWeight: 'bold',
+  },
+  currentPairTagBadge: {
+    backgroundColor: '#dbeafe',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    marginLeft: 6,
+  },
+  currentPairTagBadgeText: {
+    fontSize: 9,
+    color: '#1d4ed8',
+    fontWeight: '800',
+  },
+  top20CountGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  top20CountLabel: {
+    fontSize: 10,
+    color: '#64748b',
+  },
+  top20CountNumber: {
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  top20CountBlue: {
+    color: '#2563eb',
+  },
+  top20CountRed: {
+    color: '#dc2626',
   },
 
   oppositeActionBtn: {
@@ -4875,79 +5097,6 @@ const styles = StyleSheet.create({
   tdText: {
     fontSize: 11,
   },
-
-  // TOP 20 동반 출현 전용 스타일
-  top20HeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  top20SubLabel: {
-    fontSize: 10.5,
-    fontWeight: '700',
-    color: '#64748b',
-  },
-  top20ListWrapper: {
-    maxHeight: 280,
-  },
-  pairRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 5,
-    paddingHorizontal: 6,
-    borderRadius: 6,
-    marginVertical: 2,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  pairRowTop3: {
-    backgroundColor: '#f8fafc',
-    borderColor: '#cbd5e1',
-  },
-  pairRankBadgeBox: {
-    backgroundColor: '#64748b',
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    minWidth: 32,
-    alignItems: 'center',
-  },
-  badgeGold: {
-    backgroundColor: '#d97706',
-  },
-  badgeSilver: {
-    backgroundColor: '#64748b',
-  },
-  badgeBronze: {
-    backgroundColor: '#b45309',
-  },
-  pairRankBadgeNum: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '900',
-  },
-  warningUnder10Badge: {
-    backgroundColor: '#fee2e2',
-    borderWidth: 1,
-    borderColor: '#fca5a5',
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  warningUnder10Text: {
-    fontSize: 9.5,
-    fontWeight: '800',
-    color: '#dc2626',
-  },
-  pairCountText: {
-    fontSize: 11,
-    color: '#475569',
-    fontWeight: '600',
-  },
-
   scannerWrapper: {
     flex: 1,
     backgroundColor: '#000000',
@@ -5004,6 +5153,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '800',
+    marginBottom: 4,
   },
   scannerSubGuideText: {
     color: '#94a3b8',
