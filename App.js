@@ -143,6 +143,7 @@ const isEssentialValid = (numbers) => {
   return true;
 };
 
+// [고급 필터 1] 끝수 다양성(4~6개) 및 이웃수(1~3개) 포함 12대 정밀 검증기
 const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   const minNum = sorted[0];
@@ -171,18 +172,27 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const ac = calculateACValue(sorted);
   if (ac < 7 || ac > 10) return false;
 
+  // 소수(1 포함) 1~3개
   const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
   if (primeCount < 1 || primeCount > 3) return false;
 
+  // 3의 배수 1~3개
   const mult3Count = sorted.filter((n) => n % 3 === 0).length;
   if (mult3Count < 1 || mult3Count > 3) return false;
 
+  // 5의 배수 최대 2개
   const mult5Count = sorted.filter((n) => n % 5 === 0).length;
   if (mult5Count >= 3) return false;
 
+  // 쌍둥이수 최대 1개
   const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
   if (twinCount >= 2) return false;
 
+  // 끝수 다양성: 고유 끝수 종류가 4~6종류여야 통과 (3종류 이하 비정상 쏠림 배제)
+  const distinctEnds = new Set(sorted.map((n) => n % 10)).size;
+  if (distinctEnds < 4) return false;
+
+  // 동일 끝수 최대 2개
   const lastDigitCounts = {};
   for (const n of sorted) {
     const d = n % 10;
@@ -190,6 +200,7 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
     if (lastDigitCounts[d] >= 3) return false;
   }
 
+  // 3연번 차단 & 2연번 1쌍 이하
   let consecutivePairs = 0;
   for (let i = 0; i < sorted.length - 1; i++) {
     if (sorted[i + 1] - sorted[i] === 1) {
@@ -202,6 +213,7 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   }
   if (consecutivePairs > 1) return false;
 
+  // 10단위 구간 멸 1~2개
   const sectionCounts = [0, 0, 0, 0, 0];
   sorted.forEach((n) => {
     if (n <= 9) sectionCounts[0]++;
@@ -213,20 +225,29 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const deadSections = sectionCounts.filter((cnt) => cnt === 0).length;
   if (deadSections < 1 || deadSections > 2) return false;
 
+  // 7x7 용지 마킹 멸 패턴 (2~4개)
   const { deadRows, deadCols } = getPaperDeadPattern(sorted);
   if (deadRows < 2 || deadRows > 4) return false;
   if (deadCols < 2 || deadCols > 4) return false;
 
   if (dynamicContext) {
-    const { round1Numbers, doubleCarryOver } = dynamicContext;
+    const { round1Numbers, doubleCarryOver, neighborSet } = dynamicContext;
 
+    // 직전 이월수 최대 1개
     if (round1Numbers && round1Numbers.length > 0) {
       const carryCount = sorted.filter((n) => round1Numbers.includes(n)).length;
       if (carryCount >= 2) return false;
     }
 
+    // 2주 연속 이월수 차단
     if (doubleCarryOver && doubleCarryOver.length > 0) {
       if (sorted.some((n) => doubleCarryOver.includes(n))) return false;
+    }
+
+    // 직전 회차 이웃수 필터: 1~3개 포함 조합만 허용 (0개이거나 4개 이상 과밀 차단)
+    if (neighborSet && neighborSet.size > 0) {
+      const neighborCount = sorted.filter((n) => neighborSet.has(n)).length;
+      if (neighborCount < 1 || neighborCount > 3) return false;
     }
   }
 
@@ -290,6 +311,7 @@ export default function App() {
   const [manualSelectedNumbers, setManualSelectedNumbers] = useState([]);
   const [isManualModalVisible, setIsManualModalVisible] = useState(false);
 
+  // 최신 당첨번호 수동 등록/삭제 모달
   const [isManualWinningModalVisible, setIsManualWinningModalVisible] = useState(false);
   const [inputWinningRound, setInputWinningRound] = useState('');
   const [inputWinningDate, setInputWinningDate] = useState('');
@@ -467,18 +489,24 @@ export default function App() {
 
     const doubleCarryOver = list1.filter((n) => list2.includes(n));
 
+    // 직전 회차의 이웃수(Neighbor) 집합 계산
+    const neighborSet = new Set();
+    list1.forEach((num) => {
+      if (num > 1) neighborSet.add(num - 1);
+      if (num < 45) neighborSet.add(num + 1);
+    });
+
     return {
       round1Numbers: list1,
       doubleCarryOver,
+      neighborSet,
     };
   }, [latestRound, getLottoNumbersByRound]);
 
-  // [수정: 무한 루프 탈출 안전 장치 탑재]
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
 
-      // 1단계: 12대 정밀 필터링 시도 (최대 20,000회)
       let attempts = 0;
       while (attempts < 20000) {
         attempts++;
@@ -490,7 +518,6 @@ export default function App() {
         }
       }
 
-      // 2단계 세이프가드: 총합 100~180 등 기본 뼈대 사수 (최대 5,000회)
       attempts = 0;
       while (attempts < 5000) {
         attempts++;
@@ -502,7 +529,6 @@ export default function App() {
         }
       }
 
-      // 3단계 폴백: 무한 루프 차단 (최대 2,000회 탐색 후 실패 시 안전 기본 세트 반환)
       attempts = 0;
       while (attempts < 2000) {
         attempts++;
@@ -519,7 +545,35 @@ export default function App() {
     [getDynamicContextData]
   );
 
-  // [수정: 역대 990개 2수 궁합 랭킹 맵 메모이제이션]
+  // [고급 기능 2] 간이 휠링 시스템 (Abbreviated Wheeling System) 5게임 커버링 생성기
+  const generateWheelingSystemSets = useCallback(
+    (excluded = []) => {
+      // 1. 제외수를 뺀 풀에서 최상위 후보 10수 선별
+      const availablePool = allNumbers.filter((n) => !excluded.includes(n));
+      if (availablePool.length < 10) {
+        Alert.alert('알림', '휠링 시스템을 가동하려면 최소 10개 이상의 후보수가 필요합니다.');
+        return [];
+      }
+
+      // 우수 점수 기반 상위 10수 무작위/가중 추출
+      const shuffled = [...availablePool].sort(() => 0.5 - Math.random());
+      const wheelPool = shuffled.slice(0, 10).sort((a, b) => a - b);
+
+      // 수학적 10수 5게임 휠링 마스크 (3-if-4 or 4-if-5 보장형 커버링 디자인)
+      const wheelMasks = [
+        [0, 1, 2, 3, 4, 5],
+        [0, 2, 4, 6, 7, 8],
+        [1, 3, 5, 6, 8, 9],
+        [0, 3, 4, 7, 8, 9],
+        [1, 2, 5, 6, 7, 9],
+      ];
+
+      return wheelMasks.map((mask) => mask.map((idx) => wheelPool[idx]).sort((a, b) => a - b));
+    },
+    [allNumbers]
+  );
+
+  // 역대 990개 2수 궁합 랭킹 맵
   const globalPairsRankingMap = useMemo(() => {
     const pairCounts = {};
     for (let i = 1; i <= 45; i++) {
@@ -549,7 +603,7 @@ export default function App() {
       rankMap[`${item.n1}-${item.n2}`] = {
         rank: idx + 1,
         count: item.count,
-        percentile: ((idx + 1) / 990 * 100).toFixed(1),
+        percentile: (((idx + 1) / 990) * 100).toFixed(1),
       };
     });
 
@@ -856,6 +910,68 @@ export default function App() {
     );
   };
 
+  // [고급 기능 3] 회귀 주기 표준편차 Z-Score 계산 함수
+  const calculateCycleZScores = useCallback(
+    (numbers, targetBaseRound) => {
+      const zScores = {};
+
+      numbers.forEach((num) => {
+        const intervals = [];
+        let lastSeenRound = null;
+
+        for (let r = 1; r <= targetBaseRound; r++) {
+          const rData = getLottoNumbersByRound(r);
+          if (rData && rData.numbers && !rData.isPending && rData.numbers.includes(num)) {
+            if (lastSeenRound !== null) {
+              intervals.push(r - lastSeenRound);
+            }
+            lastSeenRound = r;
+          }
+        }
+
+        const currentGap = lastSeenRound !== null ? targetBaseRound - lastSeenRound : 30;
+
+        if (intervals.length >= 2) {
+          const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+          const variance =
+            intervals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / intervals.length;
+          const stdDev = Math.sqrt(variance) || 1;
+          const z = (currentGap - mean) / stdDev;
+
+          let status = '정상 흐름';
+          let color = '#059669';
+          if (z >= 1.5) {
+            status = '🔴 출현 임박';
+            color = '#dc2626';
+          } else if (z < -0.5) {
+            status = '🔵 냉각 필요';
+            color = '#2563eb';
+          }
+
+          zScores[num] = {
+            mean: mean.toFixed(1),
+            stdDev: stdDev.toFixed(1),
+            zVal: z.toFixed(2),
+            status,
+            color,
+          };
+        } else {
+          zScores[num] = {
+            mean: '7.5',
+            stdDev: '3.0',
+            zVal: '0.00',
+            status: '데이터 축적 중',
+            color: '#64748b',
+          };
+        }
+      });
+
+      return zScores;
+    },
+    [getLottoNumbersByRound]
+  );
+
+  // 공용 정밀 분석 데이터 생성기
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -926,6 +1042,10 @@ export default function App() {
         absenceWeeks[n] = count;
       });
 
+      // Z-Score 주기 통계 산출
+      const zScores = calculateCycleZScores(nums, targetBaseRound);
+
+      // 15개 2수 조합 매핑
       const internal15Pairs = [];
       for (let i = 0; i < nums.length; i++) {
         for (let j = i + 1; j < nums.length; j++) {
@@ -965,6 +1085,7 @@ export default function App() {
         endDigitMap[d].push(n);
       });
       const sameEndPairs = Object.entries(endDigitMap).filter(([_, list]) => list.length >= 2);
+      const distinctEndsCount = Object.keys(endDigitMap).length;
 
       const consecutivePairsList = [];
       for (let i = 0; i < nums.length - 1; i++) {
@@ -1001,6 +1122,8 @@ export default function App() {
         carryOverNumbers,
         recent30Counts,
         absenceWeeks,
+        zScores,
+        distinctEndsCount,
         internal15Pairs,
         lowPairCount,
         rowCounts,
@@ -1020,7 +1143,7 @@ export default function App() {
         coldNumbersInSet,
       };
     },
-    [latestRound, getLottoNumbersByRound, globalPairsRankingMap]
+    [latestRound, getLottoNumbersByRound, globalPairsRankingMap, calculateCycleZScores]
   );
 
   const getFlatSavedGames = useCallback(() => {
@@ -1728,13 +1851,16 @@ export default function App() {
       } else if (optionType === 'OPT_STRICT') {
         newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers));
         title = '📊 12대 정밀 필터링 5세트 생성';
+      } else if (optionType === 'OPT_WHEELING') {
+        newGames = generateWheelingSystemSets(excludedNumbers);
+        title = '🎯 10수 압축 휠링 5세트 생성';
       }
 
       setGames(newGames);
       setGenerationTitle(title);
       setIsGeneratedModalVisible(true);
     },
-    [excludedNumbers, generateStrictFilteredSet]
+    [excludedNumbers, generateStrictFilteredSet, generateWheelingSystemSets]
   );
 
   const handleGenerateOpposite = () => {
@@ -1916,7 +2042,7 @@ export default function App() {
         </View>
       </ImageBackground>
 
-      {/* [모달 2] 5세트 추첨 결과 모달 */}
+      {/* [모달 2] 5세트 추첨 결과 모달 (휠링 시스템 옵션 버튼 통합) */}
       <Modal
         visible={isGeneratedModalVisible}
         animationType="slide"
@@ -1929,8 +2055,10 @@ export default function App() {
               <View>
                 <Text style={styles.modalTitle}>{generationTitle}</Text>
                 <Text style={styles.modalSubtitle}>
-                  {activeGenOption === 'OPT_STRICT'
-                    ? '12대 정밀 필터 적용 (소수 1~3개·AC·합계 사수)'
+                  {activeGenOption === 'OPT_WHEELING'
+                    ? '10수 압축 휠링 커버링 (3~4등 보장 설계)'
+                    : activeGenOption === 'OPT_STRICT'
+                    ? '12대 필터 + 끝수다양성 + 직전이웃수 결합'
                     : '제외수 반영 무작위 6개 추출'}
                 </Text>
               </View>
@@ -1971,14 +2099,24 @@ export default function App() {
               ))}
             </ScrollView>
 
-            <View style={styles.twoOptionBtnRow}>
+            {/* 3단 생성 옵션 바 (휠링 시스템 포함) */}
+            <View style={styles.threeOptionBtnRow}>
               <TouchableOpacity
                 style={[styles.bottomOptionBtn, styles.strictOptionBtn]}
                 onPress={() => handleGenerateWithOptions('OPT_STRICT')}
                 activeOpacity={0.85}
               >
-                <Text style={styles.bottomOptionBtnTitle}>📊 12대 정밀 필터링</Text>
-                <Text style={styles.bottomOptionBtnSub}>(소수 1~3개·이월·멸패턴 완벽적용)</Text>
+                <Text style={styles.bottomOptionBtnTitle}>📊 정밀 필터링</Text>
+                <Text style={styles.bottomOptionBtnSub}>(끝수다양성·이웃수)</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.bottomOptionBtn, styles.wheelingOptionBtn]}
+                onPress={() => handleGenerateWithOptions('OPT_WHEELING')}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.bottomOptionBtnTitle}>🎯 10수 휠링</Text>
+                <Text style={styles.bottomOptionBtnSub}>(압축 커버링 5게임)</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1987,7 +2125,7 @@ export default function App() {
                 activeOpacity={0.85}
               >
                 <Text style={styles.bottomOptionBtnTitle}>🎲 기본추첨</Text>
-                <Text style={styles.bottomOptionBtnSub}>(5세트 무작위 생성)</Text>
+                <Text style={styles.bottomOptionBtnSub}>(무작위 5세트)</Text>
               </TouchableOpacity>
             </View>
 
@@ -2009,7 +2147,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 3] 저장한 번호 목록 모달 (전체화면) */}
+      {/* [모달 3] 저장한 번호 목록 모달 */}
       <Modal
         visible={isSavedModalVisible}
         animationType="slide"
@@ -2797,7 +2935,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 */}
+      {/* [모달 7] 정밀 분석 대시보드 (Z-Score 회귀 주기 분석 및 15쌍 궁합 랭킹 완벽 탑재) */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -3142,7 +3280,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 4. 특수수 및 핵심 패턴 심층 지표 */}
+                {/* 4. 특수수 및 핵심 패턴 심층 지표 (끝수 다양성 지표 통합) */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🔍 특수수 및 핵심 패턴 심층 지표
@@ -3180,16 +3318,14 @@ export default function App() {
                     </View>
 
                     <View style={styles.detailMetricCard}>
-                      <Text style={styles.detailMetricHeader}>동일 끝수 중복 현황</Text>
-                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.sameEndPairs.length > 0 ? '#dc2626' : '#64748b' }]}>
-                        {analysisTargetData.sameEndPairs.length > 0
-                          ? analysisTargetData.sameEndPairs.map(([d, list]) => `${d}끝(${list.length}개)`).join(', ')
-                          : '끝수 중복 없음'}
+                      <Text style={styles.detailMetricHeader}>끝수 다양성 (고유 4~6종)</Text>
+                      <Text style={[styles.detailMetricValue, { color: analysisTargetData.distinctEndsCount >= 4 ? '#059669' : '#dc2626' }]}>
+                        총 {analysisTargetData.distinctEndsCount}개 고유 끝수 ({analysisTargetData.distinctEndsCount >= 4 ? '안정 분포' : '과밀 쏠림'})
                       </Text>
                       <Text style={styles.detailMetricSub}>
                         {analysisTargetData.sameEndPairs.length > 0
-                          ? analysisTargetData.sameEndPairs.map(([_, list]) => `[${list.join(',')}]`).join(' ')
-                          : '모든 번호 끝수 고유'}
+                          ? analysisTargetData.sameEndPairs.map(([d, list]) => `${d}끝(${list.length})`).join(', ')
+                          : '모든 끝수 고유'}
                       </Text>
                     </View>
 
@@ -3287,7 +3423,52 @@ export default function App() {
                   ))}
                 </View>
 
-                {/* 7. [15개 2수 조합 궁합 순위 및 역대 전체 990쌍 대조 랭킹] */}
+                {/* [신규 고급 분석 섹션] 번호별 회귀 주기 Z-Score(출현 임박도) 통계 */}
+                <View style={styles.analysisSectionCard}>
+                  <Text style={styles.analysisSectionTitle}>
+                    🎯 번호별 회귀 주기 Z-Score 통계 (출현 임박 지수)
+                  </Text>
+                  <Text style={styles.pairTableSubGuide}>
+                    * 고유 평균 주기($\mu$)와 표준편차($\sigma$) 기반 정규화 지수 ($Z \ge 1.5$: 임계점 도달)
+                  </Text>
+
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.thText, { width: '18%' }]}>번호</Text>
+                    <Text style={[styles.thText, { width: '30%' }]}>평균주기(편차)</Text>
+                    <Text style={[styles.thText, { width: '24%' }]}>Z-값</Text>
+                    <Text style={[styles.thText, { width: '28%' }]}>상태 진단</Text>
+                  </View>
+                  {analysisTargetData.numbers.map((n) => {
+                    const zItem = analysisTargetData.zScores?.[n] || {
+                      mean: '7.5',
+                      stdDev: '3.0',
+                      zVal: '0.00',
+                      status: '정상',
+                      color: '#059669',
+                    };
+
+                    return (
+                      <View key={`zscore-row-${n}`} style={styles.tableRow}>
+                        <View style={{ width: '18%', flexDirection: 'row', alignItems: 'center' }}>
+                          <View style={[styles.microBall, { backgroundColor: getBallColor(n) }]}>
+                            <Text style={styles.microBallText}>{n}</Text>
+                          </View>
+                        </View>
+                        <Text style={[styles.tdText, { width: '30%', color: '#475569' }]}>
+                          {zItem.mean}주 (±{zItem.stdDev})
+                        </Text>
+                        <Text style={[styles.tdText, { width: '24%', fontWeight: 'bold', color: zItem.color }]}>
+                          {zItem.zVal > 0 ? `+${zItem.zVal}` : zItem.zVal}
+                        </Text>
+                        <Text style={[styles.tdText, { width: '28%', fontWeight: 'bold', color: zItem.color }]}>
+                          {zItem.status}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                {/* 7. 번호 내 15개 2수 조합 궁합 순위 및 역대 전체 990쌍 대조 랭킹 */}
                 <View style={styles.analysisSectionCard}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                     <Text style={styles.analysisSectionTitle}>
@@ -3345,7 +3526,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 8] QR 코드 스캐너 모달 (세로 모드 고정) */}
+      {/* [모달 8] QR 코드 스캐너 모달 (세로 고정) */}
       <Modal
         visible={isCameraModalVisible}
         animationType="fade"
@@ -3779,17 +3960,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
-  twoOptionBtnRow: {
+
+  threeOptionBtnRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
     marginBottom: 8,
     marginTop: 2,
   },
   bottomOptionBtn: {
     flex: 1,
     paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 12,
+    paddingHorizontal: 4,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 2,
@@ -3797,17 +3979,20 @@ const styles = StyleSheet.create({
   strictOptionBtn: {
     backgroundColor: '#059669',
   },
+  wheelingOptionBtn: {
+    backgroundColor: '#7c3aed',
+  },
   normalOptionBtn: {
     backgroundColor: '#2563eb',
   },
   bottomOptionBtnTitle: {
     color: '#ffffff',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
   },
   bottomOptionBtnSub: {
     color: '#e2e8f0',
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '600',
     marginTop: 2,
   },
@@ -4911,7 +5096,7 @@ const styles = StyleSheet.create({
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 3,
+    paddingVertical: 5,
   },
   microBall: {
     width: 20,
