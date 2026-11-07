@@ -283,16 +283,14 @@ export default function App() {
 
   const [excludedNumbers, setExcludedNumbers] = useState([]);
 
-  // 용지 마킹 패턴표 토글
   const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
   const [showPattern1WeekAgo, setShowPattern1WeekAgo] = useState(false);
   const [showPattern2WeeksAgo, setShowPattern2WeeksAgo] = useState(false);
 
-  // 수동 6자리 생성 모달
   const [manualSelectedNumbers, setManualSelectedNumbers] = useState([]);
   const [isManualModalVisible, setIsManualModalVisible] = useState(false);
 
-  // [신규 핵심] 최신 당첨번호 직접 수동 입력 모달 관련 상태
+  // 최신 당첨번호 직접 수동 입력 모달 관련 상태
   const [isManualWinningModalVisible, setIsManualWinningModalVisible] = useState(false);
   const [inputWinningRound, setInputWinningRound] = useState('');
   const [inputWinningDate, setInputWinningDate] = useState('');
@@ -513,7 +511,6 @@ export default function App() {
     [getDynamicContextData]
   );
 
-  // 10대 제외 예측 알고리즘 분석 모듈
   const get10ExclusionAnalytics = useCallback(() => {
     const round0 = getLottoNumbersByRound(latestRound)?.numbers || [];
     const round1 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : [];
@@ -640,7 +637,6 @@ export default function App() {
     );
   };
 
-  // 공용 정밀 분석 데이터 생성기
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -996,7 +992,18 @@ export default function App() {
     }
   };
 
-  // ================= [신규] 수동 당첨번호 입력 모달 핸들러 =================
+  // 회차 번호 입력 시 기존 캐시 데이터 자동 프리필
+  const handleWinningRoundChange = (roundText) => {
+    setInputWinningRound(roundText);
+    const rNum = parseInt(roundText.trim(), 10);
+    if (!isNaN(rNum) && lottoCache[rNum] && !lottoCache[rNum].isPending) {
+      const target = lottoCache[rNum];
+      setInputWinningDate(target.drwNoDate || calculateDrwDate(rNum));
+      setInputWinningBalls(target.numbers || []);
+      setInputBonusBall(target.bnusNo || null);
+    }
+  };
+
   const openManualWinningModal = () => {
     const nextRound = (latestRound + 1).toString();
     const now = new Date();
@@ -1060,11 +1067,57 @@ export default function App() {
       setIsManualWinningModalVisible(false);
       Alert.alert('반영 완료', `제 ${roundNum}회 당첨번호가 앱에 성공적으로 수동 등록되었습니다.`);
     } catch (e) {
-      Alert.alert('저장 실패', '수동 당첨번호를 캐시에 저장하는 중 오류가 발생했습니다.');
+      Alert.alert('저장 실패', '수동 당첨번호를 저장하는 중 오류가 발생했습니다.');
     }
   };
 
-  // 새로고침 로직
+  // [신규 핵심] 입력된 회차의 당첨번호 데이터 영구 삭제 처리기
+  const handleDeleteManualWinningRound = () => {
+    const roundNum = parseInt(inputWinningRound.trim(), 10);
+    if (isNaN(roundNum) || roundNum < 1) {
+      Alert.alert('오류', '삭제할 유효한 회차 번호를 입력해 주세요.');
+      return;
+    }
+
+    if (!lottoCache[roundNum]) {
+      Alert.alert('알림', `제 ${roundNum}회 당첨번호는 등록되어 있지 않습니다.`);
+      return;
+    }
+
+    Alert.alert(
+      '당첨번호 삭제 확인',
+      `제 ${roundNum}회 당첨번호 데이터를 기기 캐시 및 목록에서 완전히 삭제하시겠습니까?`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const updatedCache = { ...lottoCache };
+              delete updatedCache[roundNum];
+
+              const validRounds = Object.keys(updatedCache)
+                .map(Number)
+                .filter((r) => !isNaN(r) && updatedCache[r] && !updatedCache[r].isPending);
+              const maxRound = validRounds.length > 0 ? Math.max(...validRounds) : INITIAL_LATEST_ROUND;
+
+              setLottoCache(updatedCache);
+              setLatestRound(maxRound);
+              setWinningTopRound(maxRound);
+
+              await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updatedCache));
+              setIsManualWinningModalVisible(false);
+              Alert.alert('삭제 완료', `제 ${roundNum}회 당첨번호가 삭제되었습니다.`);
+            } catch (e) {
+              Alert.alert('삭제 실패', '당첨번호를 삭제하는 중 오류가 발생했습니다.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleRefreshLatestRound = async () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
@@ -1090,7 +1143,7 @@ export default function App() {
       } else {
         Alert.alert(
           '갱신 안내',
-          '현재 동행복권 서버에 최신 추첨 결과가 아직 등록되지 않았습니다. 우측 [✏️ 수동] 버튼으로 즉시 직접 등록할 수도 있습니다.'
+          '현재 동행복권 서버에 최신 추첨 결과가 아직 등록되지 않았습니다. [✏️ 수동] 버튼으로 즉시 직접 등록할 수도 있습니다.'
         );
       }
     } catch (e) {
@@ -1953,7 +2006,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 4] 10대 알고리즘 기반 단일 제외수 팝업 모달 (생성필터 탭 삭제 완료) */}
+      {/* [모달 4] 10대 알고리즘 기반 단일 제외수 팝업 모달 */}
       <Modal
         visible={isExcludeModalVisible}
         animationType="fade"
@@ -2236,7 +2289,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [신규 핵심 모달] 최신 당첨번호 수동 직접 입력 및 저장 모달 */}
+      {/* [모달 5-2] 최신 당첨번호 수동 등록 및 회차 삭제 모달 */}
       <Modal
         visible={isManualWinningModalVisible}
         animationType="slide"
@@ -2246,7 +2299,7 @@ export default function App() {
         <View style={styles.centerModalOverlay}>
           <View style={[styles.excludePopupBox, { maxHeight: '92%' }]}>
             <View style={[styles.excludeHeaderBox, { backgroundColor: '#1e3a8a' }]}>
-              <Text style={[styles.excludeHeaderTitle, { color: '#ffffff' }]}>✏️ 최신 당첨번호 수동 등록</Text>
+              <Text style={[styles.excludeHeaderTitle, { color: '#ffffff' }]}>✏️ 당첨번호 수동 관리</Text>
               <TouchableOpacity
                 onPress={() => setIsManualWinningModalVisible(false)}
                 style={styles.excludeCloseTouch}
@@ -2262,7 +2315,7 @@ export default function App() {
                 <TextInput
                   style={styles.manualWinningTextInput}
                   value={inputWinningRound}
-                  onChangeText={setInputWinningRound}
+                  onChangeText={handleWinningRoundChange}
                   keyboardType="number-pad"
                   placeholder="예: 1249"
                 />
@@ -2341,14 +2394,24 @@ export default function App() {
               </View>
             </ScrollView>
 
+            {/* 수동 등록 / 회차 삭제 / 초기화 3단 버튼 */}
             <View style={styles.excludePopupBtnRow}>
               <TouchableOpacity
                 style={[styles.excludeConfirmOrangeBtn, { backgroundColor: '#1d4ed8' }]}
                 onPress={handleSaveManualWinningRound}
                 activeOpacity={0.8}
               >
-                <Text style={styles.btnTextWhiteBold}>당첨번호 저장 및 반영</Text>
+                <Text style={styles.btnTextWhiteBold}>저장/반영</Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.excludeConfirmOrangeBtn, { backgroundColor: '#dc2626' }]}
+                onPress={handleDeleteManualWinningRound}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnTextWhiteBold}>회차삭제</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity
                 style={[styles.excludeResetBlueBtn, { backgroundColor: '#64748b' }]}
                 onPress={() => {
@@ -2357,7 +2420,7 @@ export default function App() {
                 }}
                 activeOpacity={0.8}
               >
-                <Text style={styles.btnTextWhiteBold}>번호초기화</Text>
+                <Text style={styles.btnTextWhiteBold}>초기화</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3039,7 +3102,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 8] QR 코드 스캐너 모달 (세로 고정 및 카메라 프리뷰 회전 방지) */}
+      {/* [모달 8] QR 코드 스캐너 모달 (세로 고정) */}
       <Modal
         visible={isCameraModalVisible}
         animationType="fade"
@@ -3813,7 +3876,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
-  // 수동 당첨번호 입력 모달 전용 스타일
   manualWinningInputForm: {
     backgroundColor: '#f8fafc',
     padding: 12,
@@ -4664,7 +4726,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '800',
-    marginBottom: 4,
   },
   scannerSubGuideText: {
     color: '#94a3b8',
