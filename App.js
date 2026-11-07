@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -270,7 +270,7 @@ const parseLottoQrUrl = (url) => {
 
 export default function App() {
   const gameLabels = ['A', 'B', 'C', 'D', 'E'];
-  const allNumbers = Array.from({ length: 45 }, (_, i) => i + 1);
+  const allNumbers = useMemo(() => Array.from({ length: 45 }, (_, i) => i + 1), []);
 
   const [latestRound, setLatestRound] = useState(INITIAL_LATEST_ROUND);
   const [lottoCache, setLottoCache] = useState({});
@@ -320,6 +320,7 @@ export default function App() {
   const displayed15Rounds = Array.from({ length: 15 }, (_, i) => winningTopRound - i).filter((r) => r >= 1);
   const bottomRound = displayed15Rounds.length > 0 ? displayed15Rounds[displayed15Rounds.length - 1] : winningTopRound;
 
+  // ================= [1차 / 2차 통합 수신 모듈] =================
   const fetchLottoRoundWithFallback = async (drwNo) => {
     const cacheBuster = `?t=${Date.now()}`;
 
@@ -472,10 +473,12 @@ export default function App() {
     };
   }, [latestRound, getLottoNumbersByRound]);
 
+  // [수정: 무한 루프 탈출 안전 장치 탑재]
   const generateStrictFilteredSet = useCallback(
     (excluded = []) => {
       const dynamicContext = getDynamicContextData();
 
+      // 1단계: 12대 정밀 필터링 시도 (최대 20,000회)
       let attempts = 0;
       while (attempts < 20000) {
         attempts++;
@@ -487,6 +490,7 @@ export default function App() {
         }
       }
 
+      // 2단계 세이프가드: 총합 100~180 등 기본 뼈대 사수 (최대 5,000회)
       attempts = 0;
       while (attempts < 5000) {
         attempts++;
@@ -498,41 +502,25 @@ export default function App() {
         }
       }
 
-      while (true) {
+      // 3단계 폴백: 무한 루프 차단 (최대 2,000회 탐색 후 실패 시 안전 기본 세트 반환)
+      attempts = 0;
+      while (attempts < 2000) {
+        attempts++;
         const candidate = generateBasicLottoSet(excluded);
+        if (candidate.length < 6) return [];
         const sum = candidate.reduce((acc, cur) => acc + cur, 0);
         if (sum >= 100 && sum <= 180) {
           return candidate;
         }
       }
+
+      return generateBasicLottoSet(excluded);
     },
     [getDynamicContextData]
   );
 
-  // =================================================================
-  // [역대 990개 2수 궁합 전수 랭킹 맵 구축 및 개별 출현 횟수 모듈]
-  // =================================================================
-  const getPairAffinityCount = useCallback(
-    (numA, numB) => {
-      const a = Math.min(numA, numB);
-      const b = Math.max(numA, numB);
-      let matchCount = 0;
-
-      for (let r = 1; r <= latestRound; r++) {
-        const rData = getLottoNumbersByRound(r);
-        if (rData && rData.numbers && !rData.isPending) {
-          if (rData.numbers.includes(a) && rData.numbers.includes(b)) {
-            matchCount++;
-          }
-        }
-      }
-      return matchCount;
-    },
-    [latestRound, getLottoNumbersByRound]
-  );
-
-  // 1회~최신회차 기준 990개 전체 2수 쌍의 출현 횟수 및 순위 맵(Map)을 반환
-  const getGlobalAllPairsRankingMap = useCallback(() => {
+  // [수정: 역대 990개 2수 궁합 랭킹 맵 메모이제이션]
+  const globalPairsRankingMap = useMemo(() => {
     const pairCounts = {};
     for (let i = 1; i <= 45; i++) {
       for (let j = i + 1; j <= 45; j++) {
@@ -541,7 +529,7 @@ export default function App() {
     }
 
     for (let r = 1; r <= latestRound; r++) {
-      const rData = getLottoNumbersByRound(r);
+      const rData = lottoCache[r];
       if (rData && rData.numbers && !rData.isPending) {
         const nums = rData.numbers;
         for (let i = 0; i < nums.length; i++) {
@@ -566,9 +554,16 @@ export default function App() {
     });
 
     return rankMap;
-  }, [latestRound, getLottoNumbersByRound]);
+  }, [latestRound, lottoCache]);
 
-  // 10회 미만 출현 2수 궁합을 진단하고 최적의 대체수로 교체하는 함수
+  const getPairAffinityCount = useCallback(
+    (numA, numB) => {
+      const key = `${Math.min(numA, numB)}-${Math.max(numA, numB)}`;
+      return globalPairsRankingMap[key]?.count || 0;
+    },
+    [globalPairsRankingMap]
+  );
+
   const repairCompatibilityInSet = useCallback(
     (originalNumbers) => {
       let currentNums = [...originalNumbers].sort((a, b) => a - b);
@@ -735,7 +730,6 @@ export default function App() {
     );
   };
 
-  // 10대 제외 예측 알고리즘 분석 모듈
   const get10ExclusionAnalytics = useCallback(() => {
     const round0 = getLottoNumbersByRound(latestRound)?.numbers || [];
     const round1 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : [];
@@ -862,7 +856,6 @@ export default function App() {
     );
   };
 
-  // 공용 정밀 분석 데이터 생성기 (15개 조합 궁합 및 역대 990쌍 전체 순위 대조)
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -933,17 +926,13 @@ export default function App() {
         absenceWeeks[n] = count;
       });
 
-      // [핵심 연산] 990개 전체 순위 맵 가져오기
-      const globalRankMap = getGlobalAllPairsRankingMap();
-
-      // 현재 6개 번호 내 15개 2수 조합의 랭킹 및 출현 횟수 매핑
       const internal15Pairs = [];
       for (let i = 0; i < nums.length; i++) {
         for (let j = i + 1; j < nums.length; j++) {
           const n1 = nums[i];
           const n2 = nums[j];
-          const key = `${n1}-${n2}`;
-          const globalInfo = globalRankMap[key] || { rank: 990, count: 0, percentile: '100.0' };
+          const key = `${Math.min(n1, n2)}-${Math.max(n1, n2)}`;
+          const globalInfo = globalPairsRankingMap[key] || { rank: 990, count: 0, percentile: '100.0' };
           internal15Pairs.push({
             n1,
             n2,
@@ -954,7 +943,6 @@ export default function App() {
         }
       }
 
-      // 내 조합 안에서 동반 출현 횟수가 높은 순(1위~15위)으로 정렬
       internal15Pairs.sort((a, b) => b.count - a.count);
       const lowPairCount = internal15Pairs.filter((p) => p.count < 10).length;
 
@@ -1013,7 +1001,7 @@ export default function App() {
         carryOverNumbers,
         recent30Counts,
         absenceWeeks,
-        internal15Pairs, // 현재 번호 15개 쌍의 궁합 및 역대 전체 순위 목록
+        internal15Pairs,
         lowPairCount,
         rowCounts,
         colCounts,
@@ -1032,8 +1020,841 @@ export default function App() {
         coldNumbersInSet,
       };
     },
-    [latestRound, getLottoNumbersByRound, getGlobalAllPairsRankingMap]
+    [latestRound, getLottoNumbersByRound, globalPairsRankingMap]
   );
+
+  const getFlatSavedGames = useCallback(() => {
+    const flat = [];
+    savedSets.forEach((item) => {
+      item.games.forEach((g, gIdx) => {
+        const label = item.games.length === 1 ? '수동' : gameLabels[gIdx];
+        flat.push({
+          id: item.id,
+          date: item.date,
+          game: g,
+          gIdx,
+          gameLabel: label,
+        });
+      });
+    });
+    return flat;
+  }, [savedSets, gameLabels]);
+
+  const handleDeleteGameFromAnalysis = (targetIndex) => {
+    const flatList = getFlatSavedGames();
+    if (targetIndex < 0 || targetIndex >= flatList.length) return;
+    const target = flatList[targetIndex];
+
+    Alert.alert('저장 번호 삭제', `${target.gameLabel} 게임을 보관함에서 삭제하시겠습니까?`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const updated = savedSets
+              .map((item) => {
+                if (item.id === target.id) {
+                  const remainingGames = item.games.filter((_, idx) => idx !== target.gIdx);
+                  return { ...item, games: remainingGames };
+                }
+                return item;
+              })
+              .filter((item) => item.games.length > 0);
+
+            setSavedSets(updated);
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+
+            const newFlat = [];
+            updated.forEach((item) => {
+              item.games.forEach((g, gIdx) => {
+                const label = item.games.length === 1 ? '수동' : gameLabels[gIdx];
+                newFlat.push({
+                  id: item.id,
+                  date: item.date,
+                  game: g,
+                  gIdx,
+                  gameLabel: label,
+                });
+              });
+            });
+
+            if (newFlat.length === 0) {
+              setIsAnalysisModalVisible(false);
+              Alert.alert('삭제 완료', '모든 저장 번호가 삭제되었습니다.');
+            } else {
+              const nextIdx = Math.min(targetIndex, newFlat.length - 1);
+              const nextTarget = newFlat[nextIdx];
+              const result = calculateNumbersAnalysis(
+                nextTarget.game,
+                latestRound,
+                `저장 번호 정밀 분석 (${nextTarget.gameLabel})`,
+                `저장일시: ${nextTarget.date} | 최신 제${latestRound}회 공식 기준 심층 분석`,
+                null,
+                'SAVED',
+                nextIdx
+              );
+              setAnalysisTargetData(result);
+            }
+          } catch (e) {
+            Alert.alert('삭제 오류', '게임을 삭제하는 중 문제가 발생했습니다.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const navigateWinningAnalysis = async (targetRound) => {
+    if (targetRound < 1 || targetRound > latestRound) return;
+    let roundData = getLottoNumbersByRound(targetRound);
+
+    if (roundData.isPending) {
+      const fetched = await fetchLottoRoundWithFallback(targetRound);
+      if (fetched) {
+        roundData = { ...fetched, isPending: false };
+        const updated = { ...lottoCache, [fetched.drwNo]: roundData };
+        setLottoCache(updated);
+        await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
+      }
+    }
+
+    const result = calculateNumbersAnalysis(
+      roundData.numbers,
+      targetRound,
+      `제 ${targetRound}회 당첨번호 정밀 분석`,
+      `제${targetRound}회 당시 공식 기준 심층 데이터 분석`,
+      roundData.bnusNo,
+      'WINNING',
+      targetRound
+    );
+    setAnalysisTargetData(result);
+  };
+
+  const navigateSavedAnalysis = (targetIndex) => {
+    const flatList = getFlatSavedGames();
+    if (targetIndex < 0 || targetIndex >= flatList.length) return;
+    const target = flatList[targetIndex];
+
+    const result = calculateNumbersAnalysis(
+      target.game,
+      latestRound,
+      `저장 번호 정밀 분석 (${target.gameLabel})`,
+      `저장일시: ${target.date} | 최신 제${latestRound}회 공식 기준 심층 분석`,
+      null,
+      'SAVED',
+      targetIndex
+    );
+    setAnalysisTargetData(result);
+  };
+
+  const toggleExcludeNumber = (num) => {
+    if (excludedNumbers.includes(num)) {
+      setExcludedNumbers(excludedNumbers.filter((n) => n !== num));
+    } else {
+      if (excludedNumbers.length >= 39) {
+        Alert.alert('알림', '최소 6개의 번호는 남아있어야 합니다 (최대 39개 제외).');
+        return;
+      }
+      setExcludedNumbers([...excludedNumbers, num].sort((a, b) => a - b));
+    }
+  };
+
+  const handleInvertExcludeNumbers = () => {
+    const inverted = allNumbers.filter((n) => !excludedNumbers.includes(n));
+    if (inverted.length > 39) {
+      Alert.alert('반전 불가', '최소 6개의 번호는 남아있어야 합니다.');
+      return;
+    }
+    setExcludedNumbers(inverted);
+  };
+
+  const toggleManualNumber = (num) => {
+    if (manualSelectedNumbers.includes(num)) {
+      setManualSelectedNumbers(manualSelectedNumbers.filter((n) => n !== num));
+    } else {
+      if (manualSelectedNumbers.length >= 6) {
+        Alert.alert('알림', '로또 번호는 6개까지만 선택할 수 있습니다.');
+        return;
+      }
+      setManualSelectedNumbers([...manualSelectedNumbers, num].sort((a, b) => a - b));
+    }
+  };
+
+  const handleSaveManualNumbers = async () => {
+    if (manualSelectedNumbers.length !== 6) {
+      Alert.alert('알림', '번호를 6개 모두 선택해 주세요.');
+      return;
+    }
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(
+      now.getDate()
+    ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const newEntry = {
+      id: Date.now().toString(),
+      date: `${dateStr} (수동)`,
+      games: [manualSelectedNumbers],
+    };
+    try {
+      const updated = [newEntry, ...savedSets];
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      setSavedSets(updated);
+      setIsManualModalVisible(false);
+      Alert.alert('등록 완료', '선택한 6개 번호가 저장함에 보관되었습니다.', [
+        { text: '확인', onPress: () => setIsSavedModalVisible(true) },
+      ]);
+    } catch (e) {
+      Alert.alert('저장 실패', '수동 번호를 저장하는 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleWinningRoundChange = (roundText) => {
+    setInputWinningRound(roundText);
+    const rNum = parseInt(roundText.trim(), 10);
+    if (!isNaN(rNum) && lottoCache[rNum] && !lottoCache[rNum].isPending) {
+      const target = lottoCache[rNum];
+      setInputWinningDate(target.drwNoDate || calculateDrwDate(rNum));
+      setInputWinningBalls(target.numbers || []);
+      setInputBonusBall(target.bnusNo || null);
+    }
+  };
+
+  const openManualWinningModal = () => {
+    const nextRound = (latestRound + 1).toString();
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    setInputWinningRound(nextRound);
+    setInputWinningDate(dateStr);
+    setInputWinningBalls([]);
+    setInputBonusBall(null);
+    setIsManualWinningModalVisible(true);
+  };
+
+  const toggleInputWinningBall = (num) => {
+    if (inputWinningBalls.includes(num)) {
+      setInputWinningBalls(inputWinningBalls.filter((n) => n !== num));
+    } else if (inputBonusBall === num) {
+      setInputBonusBall(null);
+    } else {
+      if (inputWinningBalls.length < 6) {
+        setInputWinningBalls([...inputWinningBalls, num].sort((a, b) => a - b));
+      } else if (inputBonusBall === null) {
+        setInputBonusBall(num);
+      } else {
+        Alert.alert('알림', '당첨번호 6개와 보너스번호 1개가 이미 모두 선택되었습니다.');
+      }
+    }
+  };
+
+  const handleSaveManualWinningRound = async () => {
+    const roundNum = parseInt(inputWinningRound.trim(), 10);
+    if (isNaN(roundNum) || roundNum < 1) {
+      Alert.alert('입력 오류', '유효한 회차 번호를 입력해 주세요.');
+      return;
+    }
+    if (inputWinningBalls.length !== 6) {
+      Alert.alert('입력 오류', '당첨번호 6개를 모두 선택해 주세요.');
+      return;
+    }
+    if (inputBonusBall === null) {
+      Alert.alert('입력 오류', '보너스 번호 1개를 선택해 주세요.');
+      return;
+    }
+
+    const newWinningData = {
+      drwNo: roundNum,
+      drwNoDate: inputWinningDate.trim() || calculateDrwDate(roundNum),
+      numbers: [...inputWinningBalls].sort((a, b) => a - b),
+      bnusNo: inputBonusBall,
+      isPending: false,
+    };
+
+    const updatedCache = { ...lottoCache, [roundNum]: newWinningData };
+    setLottoCache(updatedCache);
+
+    if (roundNum >= latestRound) {
+      setLatestRound(roundNum);
+      setWinningTopRound(roundNum);
+    }
+
+    try {
+      await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updatedCache));
+      setIsManualWinningModalVisible(false);
+      Alert.alert('반영 완료', `제 ${roundNum}회 당첨번호가 앱에 성공적으로 수동 등록되었습니다.`);
+    } catch (e) {
+      Alert.alert('저장 실패', '수동 당첨번호를 저장하는 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleDeleteManualWinningRound = () => {
+    const roundNum = parseInt(inputWinningRound.trim(), 10);
+    if (isNaN(roundNum) || roundNum < 1) {
+      Alert.alert('오류', '삭제할 유효한 회차 번호를 입력해 주세요.');
+      return;
+    }
+
+    if (!lottoCache[roundNum]) {
+      Alert.alert('알림', `제 ${roundNum}회 당첨번호는 등록되어 있지 않습니다.`);
+      return;
+    }
+
+    Alert.alert(
+      '당첨번호 삭제 확인',
+      `제 ${roundNum}회 당첨번호 데이터를 기기 캐시 및 목록에서 완전히 삭제하시겠습니까?`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const updatedCache = { ...lottoCache };
+              delete updatedCache[roundNum];
+
+              const validRounds = Object.keys(updatedCache)
+                .map(Number)
+                .filter((r) => !isNaN(r) && updatedCache[r] && !updatedCache[r].isPending);
+              const maxRound = validRounds.length > 0 ? Math.max(...validRounds) : INITIAL_LATEST_ROUND;
+
+              setLottoCache(updatedCache);
+              setLatestRound(maxRound);
+              setWinningTopRound(maxRound);
+
+              await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updatedCache));
+              setIsManualWinningModalVisible(false);
+              Alert.alert('삭제 완료', `제 ${roundNum}회 당첨번호가 삭제되었습니다.`);
+            } catch (e) {
+              Alert.alert('삭제 실패', '당첨번호를 삭제하는 중 오류가 발생했습니다.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleRefreshLatestRound = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+
+    try {
+      let calc = calculateCurrentLatestRound();
+      let fetched = await fetchLottoRoundWithFallback(calc);
+
+      if (!fetched && calc > 1) {
+        fetched = await fetchLottoRoundWithFallback(calc - 1);
+      }
+
+      if (fetched) {
+        const newRound = fetched.drwNo;
+        setLatestRound(newRound);
+        setWinningTopRound(newRound);
+
+        const updated = { ...lottoCache, [newRound]: { ...fetched, isPending: false } };
+        setLottoCache(updated);
+        await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
+
+        Alert.alert('동기화 완료', `제 ${newRound}회 당첨번호가 성공적으로 반영되었습니다.`);
+      } else {
+        Alert.alert(
+          '갱신 안내',
+          '현재 동행복권 서버에 최신 추첨 결과가 아직 등록되지 않았습니다. [✏️ 수동] 버튼으로 즉시 직접 등록할 수도 있습니다.'
+        );
+      }
+    } catch (e) {
+      Alert.alert('네트워크 안내', '인터넷 연결 상태를 확인해 주세요.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    const initApp = async () => {
+      let localCache = {};
+
+      try {
+        const stored = await AsyncStorage.getItem(CACHE_STORAGE_KEY);
+        if (stored) {
+          localCache = JSON.parse(stored);
+        }
+      } catch (e) {
+        console.log('캐시 로드 실패:', e);
+      }
+
+      if (Array.isArray(LOCAL_HISTORY_DATA) && LOCAL_HISTORY_DATA.length > 0) {
+        LOCAL_HISTORY_DATA.forEach(([drwNo, date, numbers, bonus]) => {
+          if (!localCache[drwNo]) {
+            localCache[drwNo] = {
+              drwNo,
+              drwNoDate: date,
+              numbers: numbers.sort((a, b) => a - b),
+              bnusNo: bonus,
+              isPending: false,
+            };
+          }
+        });
+      }
+
+      if (LOCAL_LATEST_DATA && LOCAL_LATEST_DATA.returnValue === 'success') {
+        const lNum = LOCAL_LATEST_DATA.drwNo;
+        if (!localCache[lNum]) {
+          localCache[lNum] = {
+            drwNo: lNum,
+            drwNoDate: LOCAL_LATEST_DATA.drwNoDate,
+            numbers: [
+              LOCAL_LATEST_DATA.drwtNo1,
+              LOCAL_LATEST_DATA.drwtNo2,
+              LOCAL_LATEST_DATA.drwtNo3,
+              LOCAL_LATEST_DATA.drwtNo4,
+              LOCAL_LATEST_DATA.drwtNo5,
+              LOCAL_LATEST_DATA.drwtNo6,
+            ].sort((a, b) => a - b),
+            bnusNo: LOCAL_LATEST_DATA.bnusNo,
+            firstWinamnt: LOCAL_LATEST_DATA.firstWinamnt,
+            isPending: false,
+          };
+        }
+      }
+
+      const currentStoredMax = Math.max(...Object.keys(localCache).map(Number), 1248);
+      setLatestRound(currentStoredMax);
+      setWinningTopRound(currentStoredMax);
+      setLottoCache(localCache);
+
+      let calc = calculateCurrentLatestRound();
+      if (calc > currentStoredMax) {
+        let latestFetched = await fetchLottoRoundWithFallback(calc);
+        if (!latestFetched && calc > 1) {
+          calc = calc - 1;
+          latestFetched = await fetchLottoRoundWithFallback(calc);
+        }
+
+        if (latestFetched && latestFetched.drwNo > currentStoredMax) {
+          localCache[latestFetched.drwNo] = { ...latestFetched, isPending: false };
+          setLatestRound(latestFetched.drwNo);
+          setWinningTopRound(latestFetched.drwNo);
+          setLottoCache(localCache);
+          await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(localCache));
+        }
+      }
+    };
+
+    initApp();
+    loadSavedSets();
+  }, []);
+
+  const loadSavedSets = async () => {
+    try {
+      const data = await AsyncStorage.getItem(STORAGE_KEY);
+      if (data) setSavedSets(JSON.parse(data));
+    } catch (e) {
+      console.log('로드 에러:', e);
+    }
+  };
+
+  const checkSingleRoundResult = (gameNumbers, winningNumbers, bonusNumber) => {
+    if (!winningNumbers || winningNumbers.length < 6) {
+      return { rank: '조회 대기', grade: 0, color: '#64748b', bg: '#f1f5f9' };
+    }
+    const matchCount = gameNumbers.filter((n) => winningNumbers.includes(n)).length;
+    const matchBonus = gameNumbers.includes(bonusNumber);
+
+    if (matchCount === 6) return { rank: '🥇 1등 당첨!', grade: 1, color: '#dc2626', bg: '#fee2e2' };
+    if (matchCount === 5 && matchBonus) return { rank: '🥈 2등 당첨!', grade: 2, color: '#d97706', bg: '#fef3c7' };
+    if (matchCount === 5) return { rank: '🥉 3등 당첨', grade: 3, color: '#2563eb', bg: '#eff6ff' };
+    if (matchCount === 4) return { rank: '🎁 4등 (5만원)', grade: 4, color: '#059669', bg: '#ecfdf5' };
+    if (matchCount === 3) return { rank: '🎟️ 5등 (5천원)', grade: 5, color: '#4f46e5', bg: '#eef2ff' };
+    return { rank: `${matchCount}개 일치 (낙첨)`, grade: 0, color: '#64748b', bg: '#f1f5f9' };
+  };
+
+  const calculateHistoricalWins = (gameNumbers) => {
+    const counts = { total: 0, r1: 0, r2: 0, r3: 0, r4: 0, r5: 0 };
+    for (let round = 1; round <= latestRound; round++) {
+      const roundData = getLottoNumbersByRound(round);
+      if (!roundData || roundData.isPending) continue;
+      const result = checkSingleRoundResult(gameNumbers, roundData.numbers, roundData.bnusNo);
+      if (result.grade > 0) {
+        counts.total += 1;
+        if (result.grade === 1) counts.r1 += 1;
+        else if (result.grade === 2) counts.r2 += 1;
+        else if (result.grade === 3) counts.r3 += 1;
+        else if (result.grade === 4) counts.r4 += 1;
+        else if (result.grade === 5) counts.r5 += 1;
+      }
+    }
+    return counts;
+  };
+
+  const handleExportPDF = async () => {
+    if (savedSets.length === 0) {
+      Alert.alert('알림', '저장된 로또 번호가 없습니다.');
+      return;
+    }
+
+    const rowsHtml = savedSets
+      .map((item) => {
+        const gamesHtml = item.games
+          .map((g, gIdx) => {
+            const label = item.games.length === 1 ? '수동' : gameLabels[gIdx];
+            const hist = calculateHistoricalWins(g);
+            const ballsHtml = g
+              .map(
+                (n) => `
+                  <span style="display:inline-block; width:26px; height:26px; line-height:26px; border-radius:50%; background-color:${getBallColor(
+                    n
+                  )}; color:#fff; text-align:center; font-weight:bold; font-size:12px; margin:0 2px;">
+                    ${n}
+                  </span>`
+              )
+              .join('');
+
+            return `
+              <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 8px 6px; font-weight: bold; text-align: center; color: #1e293b;">${label}</td>
+                <td style="padding: 8px 6px;">${ballsHtml}</td>
+                <td style="padding: 8px 6px; font-size: 11px; color: #475569; text-align: center;">
+                  <strong>총 ${hist.total}회</strong><br/>
+                  (1등:${hist.r1} / 2등:${hist.r2} / 3등:${hist.r3} / 4등:${hist.r4} / 5등:${hist.r5})
+                </td>
+              </tr>`;
+          })
+          .join('');
+
+        return `
+          <div style="margin-bottom: 18px; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #ffffff;">
+            <div style="background-color: #f1f5f9; padding: 8px 12px; font-size: 13px; font-weight: bold; color: #334155;">
+              📅 저장일시: ${item.date}
+            </div>
+            <table style="width: 100%; border-collapse: collapse; font-family: sans-serif;">
+              <thead>
+                <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
+                  <th style="padding: 6px; width: 14%;">구분</th>
+                  <th style="padding: 6px; width: 50%;">로또 번호</th>
+                  <th style="padding: 6px; width: 36%;">역대 당첨 횟수</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${gamesHtml}
+              </tbody>
+            </table>
+          </div>`;
+      })
+      .join('');
+
+    const fullHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>로또 저장번호 목록</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; color: #0f172a; }
+            h1 { font-size: 20px; text-align: center; color: #1e3a8a; margin-bottom: 4px; }
+            .sub-title { font-size: 12px; text-align: center; color: #64748b; margin-bottom: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>🎰 나의 로또 보관함 번호 목록</h1>
+          <div class="sub-title">기준 회차: 제${latestRound}회 (공식 서버 동기화)</div>
+          ${rowsHtml}
+        </body>
+      </html>`;
+
+    try {
+      if (Platform.OS === 'web') {
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+          printWindow.document.write(fullHtml);
+          printWindow.document.close();
+          printWindow.focus();
+          printWindow.print();
+        }
+      } else {
+        await Print.printAsync({ html: fullHtml });
+      }
+    } catch (e) {
+      Alert.alert('인쇄 오류', 'PDF 인쇄 창을 여는 중 문제가 발생했습니다.');
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (savedSets.length === 0) {
+      Alert.alert('알림', '저장된 로또 번호가 없습니다.');
+      return;
+    }
+
+    let csvString = '\uFEFF저장일시,게임구분,번호1,번호2,번호3,번호4,번호5,번호6,역대총당첨,1등,2등,3등,4등,5등\n';
+    savedSets.forEach((item) => {
+      item.games.forEach((g, gIdx) => {
+        const label = item.games.length === 1 ? '수동' : gameLabels[gIdx];
+        const hist = calculateHistoricalWins(g);
+        const safeDate = item.date.replace(/,/g, '');
+        csvString += `"${safeDate}","${label}",${g[0]},${g[1]},${g[2]},${g[3]},${g[4]},${g[5]},${hist.total},${hist.r1},${hist.r2},${hist.r3},${hist.r4},${hist.r5}\n`;
+      });
+    });
+
+    try {
+      if (Platform.OS === 'web') {
+        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `lotto_saved_numbers_${Date.now()}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else {
+        const fileUri = `${FileSystem.cacheDirectory}lotto_saved_numbers_${Date.now()}.csv`;
+        await FileSystem.writeAsStringAsync(fileUri, csvString, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+
+        const isSharingAvailable = await Sharing.isAvailableAsync();
+        if (isSharingAvailable) {
+          await Sharing.shareAsync(fileUri, {
+            mimeType: 'text/csv',
+            dialogTitle: '로또 번호 엑셀(CSV) 내보내기',
+            UTI: 'public.comma-separated-values-text',
+          });
+        } else {
+          Alert.alert('알림', '파일 공유 기능을 지원하지 않는 기기입니다.');
+        }
+      }
+    } catch (e) {
+      Alert.alert('내보내기 오류', '엑셀 파일을 생성하는 중 문제가 발생했습니다.');
+    }
+  };
+
+  const handleOpenQrScanner = async () => {
+    if (!permission || !permission.granted) {
+      const res = await requestPermission();
+      if (!res.granted) {
+        Alert.alert('카메라 권한 필요', '로또 QR코드를 스캔하려면 카메라 권한을 허용해주세요.');
+        return;
+      }
+    }
+    setScanned(false);
+    setIsCameraModalVisible(true);
+  };
+
+  const handleBarcodeScanned = async ({ data }) => {
+    if (scanned) return;
+    setScanned(true);
+
+    if (data.includes('dhlottery.co.kr') && (data.includes('?v=') || data.includes('&v='))) {
+      const parsed = parseLottoQrUrl(data);
+
+      if (!parsed) {
+        Alert.alert('인식 오류', '유효한 로또 복권 QR 코드가 아닙니다.', [
+          { text: '다시 스캔', onPress: () => setScanned(false) },
+        ]);
+        return;
+      }
+
+      try {
+        let winInfo = getLottoNumbersByRound(parsed.round);
+        if (winInfo.isPending) {
+          const fetched = await fetchLottoRoundWithFallback(parsed.round);
+          if (fetched) {
+            winInfo = { ...fetched, isPending: false };
+            const updated = { ...lottoCache, [fetched.drwNo]: winInfo };
+            setLottoCache(updated);
+            await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
+          }
+        }
+
+        const gameResults = parsed.games.map((g) =>
+          checkSingleRoundResult(g, winInfo.numbers, winInfo.bnusNo)
+        );
+
+        setQrResultData({
+          round: parsed.round,
+          games: parsed.games,
+          winningInfo: winInfo,
+          results: gameResults,
+        });
+
+        setIsCameraModalVisible(false);
+        setIsQrResultModalVisible(true);
+      } catch (e) {
+        Alert.alert('대조 오류', '당첨결과를 확인하는 중 문제가 발생했습니다.', [
+          { text: '다시 시도', onPress: () => setScanned(false) },
+        ]);
+      }
+    } else if (data.startsWith('http://') || data.startsWith('https://')) {
+      Alert.alert('외부 링크 인식', data, [
+        { text: '다시 스캔', onPress: () => setScanned(false) },
+        {
+          text: '브라우저 열기',
+          onPress: () => {
+            setIsCameraModalVisible(false);
+            Linking.openURL(data);
+          },
+        },
+      ]);
+    } else {
+      Alert.alert('인식 결과', data, [{ text: '다시 스캔', onPress: () => setScanned(false) }]);
+    }
+  };
+
+  const openInNaverSearch = (round = null) => {
+    const query = round ? `로또645 ${round}회 1등판매점` : '로또645 1등판매점';
+    Linking.openURL(`https://m.search.naver.com/search.naver?query=${encodeURIComponent(query)}`);
+  };
+
+  const handleSearchWinningRound = () => {
+    const r = parseInt(searchRoundInput.trim(), 10);
+    if (r >= 1 && r <= latestRound) {
+      setWinningTopRound(r);
+      setSearchRoundInput('');
+    } else {
+      Alert.alert('입력 오류', `1회부터 ${latestRound}회 사이 숫자를 입력해 주세요.`);
+    }
+  };
+
+  const handleGenerateWithOptions = useCallback(
+    (optionType) => {
+      const availableCount = 45 - excludedNumbers.length;
+      if (availableCount < 6) {
+        Alert.alert('알림', '제외수가 너무 많습니다. 최소 6개 이상의 후보 번호가 필요합니다.');
+        return;
+      }
+
+      setActiveGenOption(optionType);
+      let newGames = [];
+      let title = '';
+
+      if (optionType === 'NORMAL') {
+        newGames = Array.from({ length: 5 }, () => generateBasicLottoSet(excludedNumbers));
+        title = '🎲 기본 무작위 5세트 생성';
+      } else if (optionType === 'OPT_STRICT') {
+        newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers));
+        title = '📊 12대 정밀 필터링 5세트 생성';
+      }
+
+      setGames(newGames);
+      setGenerationTitle(title);
+      setIsGeneratedModalVisible(true);
+    },
+    [excludedNumbers, generateStrictFilteredSet]
+  );
+
+  const handleGenerateOpposite = () => {
+    if (savedSets.length === 0) {
+      Alert.alert('알림', '저장된 번호가 없습니다. 먼저 번호를 저장해주세요.');
+      return;
+    }
+
+    const savedNumbersSet = new Set();
+    savedSets.forEach((entry) => {
+      entry.games.forEach((g) => {
+        g.forEach((num) => savedNumbersSet.add(num));
+      });
+    });
+
+    const oppositePool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
+      (n) => !savedNumbersSet.has(n) && !excludedNumbers.includes(n)
+    );
+
+    if (oppositePool.length < 6) {
+      Alert.alert(
+        '반대번호 생성 불가',
+        `저장된 번호를 제외하고 남은 번호가 부족합니다. 최소 6개 이상이어야 합니다.`
+      );
+      return;
+    }
+
+    const newGames = Array.from({ length: 5 }, () => {
+      const selected = new Set();
+      const tempPool = [...oppositePool];
+      while (selected.size < 6 && tempPool.length > 0) {
+        const rIdx = Math.floor(Math.random() * tempPool.length);
+        selected.add(tempPool[rIdx]);
+        tempPool.splice(rIdx, 1);
+      }
+      return Array.from(selected).sort((a, b) => a - b);
+    });
+
+    setGames(newGames);
+    setGenerationTitle(`⚡ 반대번호 생성 (후보 ${oppositePool.length}개)`);
+    setIsSavedModalVisible(false);
+    setIsGeneratedModalVisible(true);
+  };
+
+  const handleSaveCurrentGames = async () => {
+    if (games.length === 0) return;
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(
+      now.getDate()
+    ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const newEntry = { id: Date.now().toString(), date: dateStr, games: games };
+    try {
+      const updated = [newEntry, ...savedSets];
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      setSavedSets(updated);
+      Alert.alert('저장 완료', '생성된 5세트 번호가 기기에 저장되었습니다.');
+    } catch (e) {
+      Alert.alert('저장 실패', '번호를 저장하는 중 문제가 발생했습니다.');
+    }
+  };
+
+  const handleDeleteSingleGame = (itemId, gameIdx) => {
+    Alert.alert('1게임 삭제', '선택하신 게임 번호를 삭제하시겠습니까?', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const updated = savedSets
+              .map((item) => {
+                if (item.id === itemId) {
+                  const remainingGames = item.games.filter((_, idx) => idx !== gameIdx);
+                  return { ...item, games: remainingGames };
+                }
+                return item;
+              })
+              .filter((item) => item.games.length > 0);
+
+            setSavedSets(updated);
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+          } catch (e) {
+            Alert.alert('삭제 오류', '게임을 삭제하는 중 문제가 발생했습니다.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleDeleteAllSavedSets = () => {
+    if (savedSets.length === 0) {
+      Alert.alert('알림', '삭제할 저장 번호가 없습니다.');
+      return;
+    }
+
+    Alert.alert(
+      '⚠️ 전체 삭제 확인',
+      '보관함에 저장된 모든 로또 번호를 완전히 삭제하시겠습니까?\n삭제된 번호는 복구할 수 없습니다.',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '모두 삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setSavedSets([]);
+              await AsyncStorage.removeItem(STORAGE_KEY);
+              Alert.alert('삭제 완료', '모든 저장 번호가 깨끗이 삭제되었습니다.');
+            } catch (e) {
+              Alert.alert('오류', '전체 삭제 중 문제가 발생했습니다.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const latestWinningInfo = getLottoNumbersByRound(latestRound);
+  const recent3WeeksData = getDynamicContextData();
+  const analytics10 = get10ExclusionAnalytics();
 
   return (
     <View style={styles.fullScreenContainer}>
@@ -1188,7 +2009,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 3] 저장한 번호 목록 모달 (궁합 최적화 버튼 탑재) */}
+      {/* [모달 3] 저장한 번호 목록 모달 (전체화면) */}
       <Modal
         visible={isSavedModalVisible}
         animationType="slide"
@@ -1668,14 +2489,22 @@ export default function App() {
         visible={isManualWinningModalVisible}
         animationType="slide"
         transparent={true}
-        onRequestClose={() => setIsManualWinningModalVisible(false)}
+        onRequestClose={() => {
+          setIsManualWinningModalVisible(false);
+          setInputWinningBalls([]);
+          setInputBonusBall(null);
+        }}
       >
         <View style={styles.centerModalOverlay}>
           <View style={[styles.excludePopupBox, { maxHeight: '92%' }]}>
             <View style={[styles.excludeHeaderBox, { backgroundColor: '#1e3a8a' }]}>
               <Text style={[styles.excludeHeaderTitle, { color: '#ffffff' }]}>✏️ 당첨번호 수동 관리</Text>
               <TouchableOpacity
-                onPress={() => setIsManualWinningModalVisible(false)}
+                onPress={() => {
+                  setIsManualWinningModalVisible(false);
+                  setInputWinningBalls([]);
+                  setInputBonusBall(null);
+                }}
                 style={styles.excludeCloseTouch}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
@@ -1968,7 +2797,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 (15쌍 궁합 랭킹 & 역대 990쌍 대조 순위 완벽 출력) */}
+      {/* [모달 7] 당첨번호 & 저장번호 정밀 분석 대시보드 */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -2458,7 +3287,7 @@ export default function App() {
                   ))}
                 </View>
 
-                {/* 7. [핵심 구현] 6개 번호 내 15개 2수 조합 궁합 순위 & 역대 전체 990쌍 대조 랭킹 출력 */}
+                {/* 7. [15개 2수 조합 궁합 순위 및 역대 전체 990쌍 대조 랭킹] */}
                 <View style={styles.analysisSectionCard}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                     <Text style={styles.analysisSectionTitle}>
@@ -2516,7 +3345,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* [모달 8] QR 코드 스캐너 모달 */}
+      {/* [모달 8] QR 코드 스캐너 모달 (세로 모드 고정) */}
       <Modal
         visible={isCameraModalVisible}
         animationType="fade"
@@ -4103,7 +4932,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 4.5,
+    paddingVertical: 5,
     paddingHorizontal: 6,
     borderRadius: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
