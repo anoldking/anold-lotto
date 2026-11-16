@@ -172,27 +172,21 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const ac = calculateACValue(sorted);
   if (ac < 7 || ac > 10) return false;
 
-  // 소수(1 포함) 1~3개
   const primeCount = sorted.filter((n) => PRIME_SET_WITH_ONE.has(n)).length;
   if (primeCount < 1 || primeCount > 3) return false;
 
-  // 3의 배수 1~3개
   const mult3Count = sorted.filter((n) => n % 3 === 0).length;
   if (mult3Count < 1 || mult3Count > 3) return false;
 
-  // 5의 배수 최대 2개
   const mult5Count = sorted.filter((n) => n % 5 === 0).length;
   if (mult5Count >= 3) return false;
 
-  // 쌍둥이수 최대 1개
   const twinCount = sorted.filter((n) => TWIN_NUMBERS.has(n)).length;
   if (twinCount >= 2) return false;
 
-  // 끝수 다양성: 고유 끝수 종류가 4~6종류여야 통과 (3종류 이하 비정상 쏠림 배제)
   const distinctEnds = new Set(sorted.map((n) => n % 10)).size;
   if (distinctEnds < 4) return false;
 
-  // 동일 끝수 최대 2개
   const lastDigitCounts = {};
   for (const n of sorted) {
     const d = n % 10;
@@ -200,7 +194,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
     if (lastDigitCounts[d] >= 3) return false;
   }
 
-  // 3연번 차단 & 2연번 1쌍 이하
   let consecutivePairs = 0;
   for (let i = 0; i < sorted.length - 1; i++) {
     if (sorted[i + 1] - sorted[i] === 1) {
@@ -213,7 +206,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   }
   if (consecutivePairs > 1) return false;
 
-  // 10단위 구간 멸 1~2개
   const sectionCounts = [0, 0, 0, 0, 0];
   sorted.forEach((n) => {
     if (n <= 9) sectionCounts[0]++;
@@ -225,7 +217,6 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const deadSections = sectionCounts.filter((cnt) => cnt === 0).length;
   if (deadSections < 1 || deadSections > 2) return false;
 
-  // 7x7 용지 마킹 멸 패턴 (2~4개)
   const { deadRows, deadCols } = getPaperDeadPattern(sorted);
   if (deadRows < 2 || deadRows > 4) return false;
   if (deadCols < 2 || deadCols > 4) return false;
@@ -233,18 +224,15 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   if (dynamicContext) {
     const { round1Numbers, doubleCarryOver, neighborSet } = dynamicContext;
 
-    // 직전 이월수 최대 1개
     if (round1Numbers && round1Numbers.length > 0) {
       const carryCount = sorted.filter((n) => round1Numbers.includes(n)).length;
       if (carryCount >= 2) return false;
     }
 
-    // 2주 연속 이월수 차단
     if (doubleCarryOver && doubleCarryOver.length > 0) {
       if (sorted.some((n) => doubleCarryOver.includes(n))) return false;
     }
 
-    // 직전 회차 이웃수 필터: 1~3개 포함 조합만 허용 (0개이거나 4개 이상 과밀 차단)
     if (neighborSet && neighborSet.size > 0) {
       const neighborCount = sorted.filter((n) => neighborSet.has(n)).length;
       if (neighborCount < 1 || neighborCount > 3) return false;
@@ -489,7 +477,6 @@ export default function App() {
 
     const doubleCarryOver = list1.filter((n) => list2.includes(n));
 
-    // 직전 회차의 이웃수(Neighbor) 집합 계산
     const neighborSet = new Set();
     list1.forEach((num) => {
       if (num > 1) neighborSet.add(num - 1);
@@ -908,15 +895,27 @@ export default function App() {
   };
 
   // [고급 기능 3] 회귀 주기 표준편차 Z-Score 계산 함수
+  // - 당첨번호 분석 시에는 현재 회차(baseRound)를 제외한 직전 회차(baseRound - 1)까지를 기준으로 계산
   const calculateCycleZScores = useCallback(
-    (numbers, targetBaseRound) => {
+    (numbers, calcEndRound) => {
       const zScores = {};
 
       numbers.forEach((num) => {
+        if (calcEndRound < 1) {
+          zScores[num] = {
+            mean: '-',
+            stdDev: '-',
+            zVal: '0.00',
+            status: '첫 회차(비교없음)',
+            color: '#64748b',
+          };
+          return;
+        }
+
         const intervals = [];
         let lastSeenRound = null;
 
-        for (let r = 1; r <= targetBaseRound; r++) {
+        for (let r = 1; r <= calcEndRound; r++) {
           const rData = getLottoNumbersByRound(r);
           if (rData && rData.numbers && !rData.isPending && rData.numbers.includes(num)) {
             if (lastSeenRound !== null) {
@@ -926,7 +925,7 @@ export default function App() {
           }
         }
 
-        const currentGap = lastSeenRound !== null ? targetBaseRound - lastSeenRound : 30;
+        const currentGap = lastSeenRound !== null ? calcEndRound - lastSeenRound : calcEndRound;
 
         if (intervals.length >= 2) {
           const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
@@ -968,7 +967,7 @@ export default function App() {
     [getLottoNumbersByRound]
   );
 
-  // 공용 정밀 분석 데이터 생성기 (당첨번호 분석 vs 저장번호 분석 차별화 반영)
+  // 공용 정밀 분석 데이터 생성기 (당첨번호 분석: 현재 회차 제외 이전 회차까지 기준 / 저장번호 분석: 최신 회차 포함 기준)
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -976,11 +975,14 @@ export default function App() {
       const nums = [...targetNumbers].sort((a, b) => a - b);
       const numSet = new Set(nums);
 
+      // 비교 기준 종료 회차: 당첨번호 정밀분석은 현재 회차(baseRound)를 제외한 직전 회차(baseRound - 1)까지!
+      const historyEndRound = sourceType === 'WINNING' ? baseRound - 1 : latestRound;
+
       let rank3Count = 0;
       let rank4Count = 0;
       let rank5Count = 0;
 
-      for (let r = 1; r <= latestRound; r++) {
+      for (let r = 1; r <= historyEndRound; r++) {
         const rData = getLottoNumbersByRound(r);
         if (!rData || !rData.numbers || rData.isPending) continue;
         const matches = rData.numbers.filter((n) => numSet.has(n)).length;
@@ -1006,7 +1008,6 @@ export default function App() {
             const prevNums = [...prevRoundData.numbers].sort((a, b) => a - b);
             carryOverNumbers = nums.filter((n) => prevNums.includes(n));
 
-            // 직전 회차 이웃수 (±1) 계산
             const prevNeighborPool = new Set();
             prevNums.forEach((pn) => {
               if (pn > 1) prevNeighborPool.add(pn - 1);
@@ -1014,7 +1015,6 @@ export default function App() {
             });
             const neighborHits = nums.filter((n) => prevNeighborPool.has(n));
 
-            // 직전 회차 지표 계산 (총합, 홀짝, 고저, AC, 보너스 승격 여부)
             const prevSum = prevNums.reduce((acc, cur) => acc + cur, 0);
             const prevOdd = prevNums.filter((n) => n % 2 !== 0).length;
             const prevEven = 6 - prevOdd;
@@ -1049,26 +1049,32 @@ export default function App() {
         }
       }
 
-      const targetBaseRound = sourceType === 'WINNING' ? baseRound : latestRound;
+      // 최근 30회 출현 빈도: 당첨번호 정밀분석은 현재 회차(baseRound)를 제외한 (baseRound - 30 ~ baseRound - 1) 구간만 집계
       const recent30Counts = {};
       nums.forEach((n) => (recent30Counts[n] = 0));
-      const startR = Math.max(1, targetBaseRound - 30);
-      for (let r = targetBaseRound; r >= startR; r--) {
-        const rData = getLottoNumbersByRound(r);
-        if (rData && rData.numbers && !rData.isPending) {
-          rData.numbers.forEach((n) => {
-            if (numSet.has(n)) {
-              recent30Counts[n] = (recent30Counts[n] || 0) + 1;
-            }
-          });
+      if (historyEndRound >= 1) {
+        const startR = Math.max(1, historyEndRound - 29);
+        for (let r = historyEndRound; r >= startR; r--) {
+          const rData = getLottoNumbersByRound(r);
+          if (rData && rData.numbers && !rData.isPending) {
+            rData.numbers.forEach((n) => {
+              if (numSet.has(n)) {
+                recent30Counts[n] = (recent30Counts[n] || 0) + 1;
+              }
+            });
+          }
         }
       }
 
+      // 미출현 주기(텀): 당첨번호 정밀분석은 baseRound - 1부터 역순으로 직전 당첨까지 걸린 회차 수 산출
       const absenceWeeks = {};
       nums.forEach((n) => {
+        if (historyEndRound < 1) {
+          absenceWeeks[n] = -1; // 제1회차 표시용
+          return;
+        }
         let count = 0;
-        const searchStartRound = sourceType === 'WINNING' ? baseRound - 1 : latestRound;
-        for (let r = searchStartRound; r >= 1; r--) {
+        for (let r = historyEndRound; r >= 1; r--) {
           const rData = getLottoNumbersByRound(r);
           if (rData && rData.numbers && !rData.isPending && rData.numbers.includes(n)) {
             break;
@@ -1078,8 +1084,8 @@ export default function App() {
         absenceWeeks[n] = count;
       });
 
-      // Z-Score 주기 통계 산출
-      const zScores = calculateCycleZScores(nums, targetBaseRound);
+      // Z-Score 회귀 주기 통계 (당첨번호는 baseRound - 1까지, 저장번호는 latestRound까지)
+      const zScores = calculateCycleZScores(nums, historyEndRound);
 
       // 15개 2수 조합 매핑
       const internal15Pairs = [];
@@ -1104,9 +1110,6 @@ export default function App() {
 
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
-      // 용지 오버레이 비교 주차 데이터:
-      // - 당첨번호(WINNING)는 자기 자신을 빼고 [1회 전(baseRound-1), 2회 전(baseRound-2), 3회 전(baseRound-3)]과 비교
-      // - 저장번호(SAVED)는 [이번주(latestRound), 1주 전(latestRound-1), 2주 전(latestRound-2)]와 비교
       const numbersCompareSlot1 =
         sourceType === 'WINNING'
           ? (baseRound > 1 ? getLottoNumbersByRound(baseRound - 1)?.numbers || [] : [])
@@ -1142,11 +1145,12 @@ export default function App() {
         }
       }
 
-      const minAbsenceVal = Math.min(...nums.map((n) => absenceWeeks[n]));
-      const hotNumbersInSet = nums.filter((n) => absenceWeeks[n] === minAbsenceVal);
+      const validAbsences = nums.map((n) => Math.max(0, absenceWeeks[n]));
+      const minAbsenceVal = Math.min(...validAbsences);
+      const hotNumbersInSet = nums.filter((n) => Math.max(0, absenceWeeks[n]) === minAbsenceVal);
 
-      const maxAbsenceVal = Math.max(...nums.map((n) => absenceWeeks[n]));
-      const coldNumbersInSet = nums.filter((n) => absenceWeeks[n] === maxAbsenceVal);
+      const maxAbsenceVal = Math.max(...validAbsences);
+      const coldNumbersInSet = nums.filter((n) => Math.max(0, absenceWeeks[n]) === maxAbsenceVal);
 
       return {
         numbers: nums,
@@ -1155,7 +1159,8 @@ export default function App() {
         subText,
         sourceType,
         sourceIndex,
-        baseRound: targetBaseRound,
+        baseRound,
+        historyEndRound,
         prevRoundComparison,
         numbersCompareSlot1,
         numbersCompareSlot2,
@@ -1291,7 +1296,6 @@ export default function App() {
       }
     }
 
-    // 직전 회차(targetRound - 1) 비교 데이터도 미수신 상태면 함께 수신
     if (targetRound > 1) {
       const prevData = getLottoNumbersByRound(targetRound - 1);
       if (prevData.isPending) {
@@ -1313,7 +1317,7 @@ export default function App() {
       targetRound,
       `제 ${targetRound}회 당첨번호 정밀 분석`,
       targetRound > 1
-        ? `제${targetRound}회 당첨결과 및 직전 제${targetRound - 1}회 비교 분석`
+        ? `제${targetRound}회 제외 · 직전 제${targetRound - 1}회까지 누적 기준 비교`
         : `제1회 첫 추첨 공식 당첨결과 심층 분석`,
       roundData.bnusNo,
       'WINNING',
@@ -2110,7 +2114,7 @@ export default function App() {
         </View>
       </ImageBackground>
 
-      {/* [모달 2] 5세트 추첨 결과 모달 (휠링 시스템 옵션 버튼 통합) */}
+      {/* [모달 2] 5세트 추첨 결과 모달 */}
       <Modal
         visible={isGeneratedModalVisible}
         animationType="slide"
@@ -2167,7 +2171,6 @@ export default function App() {
               ))}
             </ScrollView>
 
-            {/* 3단 생성 옵션 바 (휠링 시스템 포함) */}
             <View style={styles.threeOptionBtnRow}>
               <TouchableOpacity
                 style={[styles.bottomOptionBtn, styles.strictOptionBtn]}
@@ -2954,7 +2957,7 @@ export default function App() {
                             r,
                             `제 ${r}회 당첨번호 정밀 분석`,
                             r > 1
-                              ? `제${r}회 당첨결과 및 직전 제${r - 1}회 비교 분석`
+                              ? `제${r}회 제외 · 직전 제${r - 1}회까지 누적 기준 비교`
                               : `제1회 첫 추첨 공식 당첨결과 심층 분석`,
                             roundData.bnusNo,
                             'WINNING',
@@ -3005,7 +3008,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 7] 정밀 분석 대시보드 (당첨번호: 직전 회차 비교 / 저장번호: 최신 당첨기준 분석 차별화) */}
+      {/* [모달 7] 정밀 분석 대시보드 */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -3191,7 +3194,6 @@ export default function App() {
 
                     {analysisTargetData.prevRoundComparison ? (
                       <>
-                        {/* 직전 회차 당첨번호 볼 표시 (이월수 하이라이트) */}
                         <View style={styles.prevRoundBallsBox}>
                           <Text style={styles.prevRoundBallsLabel}>
                             직전 제{analysisTargetData.prevRoundComparison.prevRoundNo}회 번호:
@@ -3231,7 +3233,6 @@ export default function App() {
                           </View>
                         </View>
 
-                        {/* 직전 회차 대비 핵심 변화 4대 지표 */}
                         <View style={styles.prevCompareGrid}>
                           <View style={styles.prevCompareItem}>
                             <Text style={styles.prevCompareItemLabel}>이월수 (직전 동일번호)</Text>
@@ -3301,7 +3302,7 @@ export default function App() {
                   </View>
                 )}
 
-                {/* 2. 로또 용지 마킹 패턴표 (당첨번호: 직전 1~3회 전 비교 / 저장번호: 이번주~2주 전 비교) */}
+                {/* 2. 로또 용지 마킹 패턴표 */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
@@ -3447,7 +3448,9 @@ export default function App() {
                   <View style={styles.metricItem}>
                     <Text style={styles.metricLabel}>
                       {analysisTargetData.sourceType === 'WINNING'
-                        ? `직전 제${Math.max(1, analysisTargetData.sourceIndex - 1)}회 이월수`
+                        ? (analysisTargetData.sourceIndex > 1
+                            ? `직전 제${analysisTargetData.sourceIndex - 1}회 이월수`
+                            : '직전 회차 이월수')
                         : `최신 제${latestRound}회 일치수`}
                     </Text>
                     <Text style={[styles.metricValue, { color: '#dc2626' }]}>
@@ -3541,7 +3544,9 @@ export default function App() {
                     <View style={styles.detailMetricCardFull}>
                       <Text style={styles.detailMetricHeader}>
                         {analysisTargetData.sourceType === 'WINNING'
-                          ? `제${analysisTargetData.sourceIndex}회 추첨 당시 핫수 & 콜드수`
+                          ? (analysisTargetData.historyEndRound >= 1
+                              ? `제${analysisTargetData.sourceIndex}회 제외 · 직전 제${analysisTargetData.historyEndRound}회 기준 핫수 & 콜드수`
+                              : '제1회차 기준 핫수 & 콜드수')
                           : `현재 제${latestRound}회 기준 핫수 & 콜드수`}
                       </Text>
                       <View style={styles.hotColdRow}>
@@ -3551,8 +3556,10 @@ export default function App() {
                             {analysisTargetData.hotNumbersInSet.join(', ')}번
                           </Text>
                           <Text style={styles.hotBadgeSub}>
-                            {analysisTargetData.minAbsenceVal === 0
-                              ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 출현수' : '최신 공식회차 출현수')
+                            {analysisTargetData.historyEndRound < 1
+                              ? '첫 회차 출현'
+                              : analysisTargetData.minAbsenceVal === 0
+                              ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 연속출현' : '최신 공식회차 출현수')
                               : `${analysisTargetData.minAbsenceVal}주 만에 출현`}
                           </Text>
                         </View>
@@ -3563,8 +3570,10 @@ export default function App() {
                             {analysisTargetData.coldNumbersInSet.join(', ')}번
                           </Text>
                           <Text style={styles.coldBadgeSub}>
-                            {analysisTargetData.maxAbsenceVal === 0
-                              ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 출현' : '최신 공식회차 출현')
+                            {analysisTargetData.historyEndRound < 1
+                              ? '첫 회차 출현'
+                              : analysisTargetData.maxAbsenceVal === 0
+                              ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 연속출현' : '최신 공식회차 출현')
                               : `${analysisTargetData.maxAbsenceVal}주 미출현 후 출현`}
                           </Text>
                         </View>
@@ -3576,7 +3585,9 @@ export default function App() {
                 {/* 5. 역대 회차 누적 등수별 당첨 횟수 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
-                    🏆 역대 회차 누적 등수별 당첨 횟수
+                    🏆 {analysisTargetData.sourceType === 'WINNING'
+                      ? `이전 회차(~제${Math.max(0, analysisTargetData.historyEndRound)}회) 누적 등수별 당첨 횟수`
+                      : '역대 회차 누적 등수별 당첨 횟수'}
                   </Text>
                   <View style={styles.rankWinsRow}>
                     <View style={styles.rankWinCol}>
@@ -3594,15 +3605,19 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 6. 번호별 최근 30회 빈도 및 직전 미출현 주기 */}
+                {/* 6. 번호별 최근 30회 빈도 및 직전 미출현 주기 (당첨번호: 현재 회차 제외 이전 회차까지 기준) */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
-                    📈 번호별 최근 30회 빈도 및 미출현 주기 ({analysisTargetData.sourceType === 'WINNING' ? `제${analysisTargetData.sourceIndex}회 기준` : `최신 제${latestRound}회 기준`})
+                    📈 번호별 최근 30회 빈도 및 미출현 주기 ({analysisTargetData.sourceType === 'WINNING'
+                      ? (analysisTargetData.historyEndRound >= 1
+                          ? `제${analysisTargetData.sourceIndex}회 제외 · ~제${analysisTargetData.historyEndRound}회 기준`
+                          : '제1회 첫 추첨')
+                      : `최신 제${latestRound}회 기준`})
                   </Text>
                   <View style={styles.tableHeader}>
                     <Text style={[styles.thText, { width: '22%' }]}>번호</Text>
-                    <Text style={[styles.thText, { width: '38%' }]}>최근 30회 출현</Text>
-                    <Text style={[styles.thText, { width: '40%' }]}>미출현 텀</Text>
+                    <Text style={[styles.thText, { width: '38%' }]}>이전 30회 출현</Text>
+                    <Text style={[styles.thText, { width: '40%' }]}>추첨 전 미출현 텀</Text>
                   </View>
                   {analysisTargetData.numbers.map((n) => (
                     <View key={`freq-row-${n}`} style={styles.tableRow}>
@@ -3615,28 +3630,36 @@ export default function App() {
                         {analysisTargetData.recent30Counts[n]}회 출현
                       </Text>
                       <Text style={[styles.tdText, { width: '40%', color: '#475569' }]}>
-                        {analysisTargetData.absenceWeeks[n] === 0
-                          ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 출현' : '최신 회차 출현')
-                          : `${analysisTargetData.absenceWeeks[n]}주 만에 출현`}
+                        {analysisTargetData.absenceWeeks[n] < 0
+                          ? '첫 회차 (기준없음)'
+                          : analysisTargetData.absenceWeeks[n] === 0
+                          ? (analysisTargetData.sourceType === 'WINNING' ? '직전 회차 연속출현' : '최신 회차 출현')
+                          : `${analysisTargetData.absenceWeeks[n]}주 미출현 후 출현`}
                       </Text>
                     </View>
                   ))}
                 </View>
 
-                {/* [고급 분석 섹션] 번호별 회귀 주기 Z-Score(출현 임박도) 통계 */}
+                {/* [고급 분석 섹션] 번호별 회귀 주기 Z-Score 통계 (당첨번호: 현재 회차 제외 이전 회차까지 기준) */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
-                    🎯 번호별 회귀 주기 Z-Score 통계 (출현 임박 지수)
+                    🎯 번호별 회귀 주기 Z-Score 통계 ({analysisTargetData.sourceType === 'WINNING'
+                      ? (analysisTargetData.historyEndRound >= 1
+                          ? `제${analysisTargetData.sourceIndex}회 제외 · ~제${analysisTargetData.historyEndRound}회 기준`
+                          : '제1회 첫 추첨')
+                      : '출현 임박 지수'})
                   </Text>
                   <Text style={styles.pairTableSubGuide}>
-                    * 고유 평균 주기(μ)와 표준편차(σ) 기반 정규화 지수 (Z ≥ 1.5: 임계점 도달)
+                    * {analysisTargetData.sourceType === 'WINNING'
+                      ? `제${analysisTargetData.sourceIndex}회 추첨 직전 시점의 고유 평균 주기(μ)·표준편차(σ) 정규화 지수 (Z ≥ 1.5: 임계점 도달)`
+                      : '고유 평균 주기(μ)와 표준편차(σ) 기반 정규화 지수 (Z ≥ 1.5: 임계점 도달)'}
                   </Text>
 
                   <View style={styles.tableHeader}>
                     <Text style={[styles.thText, { width: '18%' }]}>번호</Text>
                     <Text style={[styles.thText, { width: '30%' }]}>평균주기(편차)</Text>
                     <Text style={[styles.thText, { width: '24%' }]}>Z-값</Text>
-                    <Text style={[styles.thText, { width: '28%' }]}>상태 진단</Text>
+                    <Text style={[styles.thText, { width: '28%' }]}>추첨 전 진단</Text>
                   </View>
                   {analysisTargetData.numbers.map((n) => {
                     const zItem = analysisTargetData.zScores?.[n] || {
@@ -3655,7 +3678,7 @@ export default function App() {
                           </View>
                         </View>
                         <Text style={[styles.tdText, { width: '30%', color: '#475569' }]}>
-                          {zItem.mean}주 (±{zItem.stdDev})
+                          {zItem.mean === '-' ? '-' : `${zItem.mean}주 (±${zItem.stdDev})`}
                         </Text>
                         <Text style={[styles.tdText, { width: '24%', fontWeight: 'bold', color: zItem.color }]}>
                           {Number(zItem.zVal) > 0 ? `+${zItem.zVal}` : zItem.zVal}
