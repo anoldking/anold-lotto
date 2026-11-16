@@ -548,18 +548,15 @@ export default function App() {
   // [고급 기능 2] 간이 휠링 시스템 (Abbreviated Wheeling System) 5게임 커버링 생성기
   const generateWheelingSystemSets = useCallback(
     (excluded = []) => {
-      // 1. 제외수를 뺀 풀에서 최상위 후보 10수 선별
       const availablePool = allNumbers.filter((n) => !excluded.includes(n));
       if (availablePool.length < 10) {
         Alert.alert('알림', '휠링 시스템을 가동하려면 최소 10개 이상의 후보수가 필요합니다.');
         return [];
       }
 
-      // 우수 점수 기반 상위 10수 무작위/가중 추출
       const shuffled = [...availablePool].sort(() => 0.5 - Math.random());
       const wheelPool = shuffled.slice(0, 10).sort((a, b) => a - b);
 
-      // 수학적 10수 5게임 휠링 마스크 (3-if-4 or 4-if-5 보장형 커버링 디자인)
       const wheelMasks = [
         [0, 1, 2, 3, 4, 5],
         [0, 2, 4, 6, 7, 8],
@@ -971,7 +968,7 @@ export default function App() {
     [getLottoNumbersByRound]
   );
 
-  // 공용 정밀 분석 데이터 생성기
+  // 공용 정밀 분석 데이터 생성기 (당첨번호 분석 vs 저장번호 분석 차별화 반영)
   const calculateNumbersAnalysis = useCallback(
     (targetNumbers, baseRound, titleText, subText, bonusNum = null, sourceType = null, sourceIndex = null) => {
       if (!targetNumbers || targetNumbers.length < 6) return null;
@@ -997,13 +994,52 @@ export default function App() {
       const sum = nums.reduce((acc, cur) => acc + cur, 0);
       const lowCount = nums.filter((n) => n <= 22).length;
       const highCount = 6 - lowCount;
+      const currentAC = calculateACValue(nums);
 
       let carryOverNumbers = [];
+      let prevRoundComparison = null;
+
       if (sourceType === 'WINNING') {
         if (baseRound > 1) {
           const prevRoundData = getLottoNumbersByRound(baseRound - 1);
           if (prevRoundData && prevRoundData.numbers && !prevRoundData.isPending) {
-            carryOverNumbers = nums.filter((n) => prevRoundData.numbers.includes(n));
+            const prevNums = [...prevRoundData.numbers].sort((a, b) => a - b);
+            carryOverNumbers = nums.filter((n) => prevNums.includes(n));
+
+            // 직전 회차 이웃수 (±1) 계산
+            const prevNeighborPool = new Set();
+            prevNums.forEach((pn) => {
+              if (pn > 1) prevNeighborPool.add(pn - 1);
+              if (pn < 45) prevNeighborPool.add(pn + 1);
+            });
+            const neighborHits = nums.filter((n) => prevNeighborPool.has(n));
+
+            // 직전 회차 지표 계산 (총합, 홀짝, 고저, AC, 보너스 승격 여부)
+            const prevSum = prevNums.reduce((acc, cur) => acc + cur, 0);
+            const prevOdd = prevNums.filter((n) => n % 2 !== 0).length;
+            const prevEven = 6 - prevOdd;
+            const prevLow = prevNums.filter((n) => n <= 22).length;
+            const prevHigh = 6 - prevLow;
+            const prevAC = calculateACValue(prevNums);
+            const bonusPromoted = prevRoundData.bnusNo ? nums.includes(prevRoundData.bnusNo) : false;
+
+            prevRoundComparison = {
+              prevRoundNo: baseRound - 1,
+              prevDate: prevRoundData.drwNoDate,
+              prevNumbers: prevNums,
+              prevBonus: prevRoundData.bnusNo,
+              carryOverNumbers,
+              neighborHits,
+              bonusPromoted,
+              prevSum,
+              sumDiff: sum - prevSum,
+              prevOdd,
+              prevEven,
+              prevLow,
+              prevHigh,
+              prevAC,
+              acDiff: currentAC - prevAC,
+            };
           }
         }
       } else {
@@ -1068,9 +1104,21 @@ export default function App() {
 
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
-      const numbersThisWeek = getLottoNumbersByRound(targetBaseRound)?.numbers || [];
-      const numbers1WeekAgo = targetBaseRound > 1 ? getLottoNumbersByRound(targetBaseRound - 1)?.numbers || [] : [];
-      const numbers2WeeksAgo = targetBaseRound > 2 ? getLottoNumbersByRound(targetBaseRound - 2)?.numbers || [] : [];
+      // 용지 오버레이 비교 주차 데이터:
+      // - 당첨번호(WINNING)는 자기 자신을 빼고 [1회 전(baseRound-1), 2회 전(baseRound-2), 3회 전(baseRound-3)]과 비교
+      // - 저장번호(SAVED)는 [이번주(latestRound), 1주 전(latestRound-1), 2주 전(latestRound-2)]와 비교
+      const numbersCompareSlot1 =
+        sourceType === 'WINNING'
+          ? (baseRound > 1 ? getLottoNumbersByRound(baseRound - 1)?.numbers || [] : [])
+          : getLottoNumbersByRound(latestRound)?.numbers || [];
+      const numbersCompareSlot2 =
+        sourceType === 'WINNING'
+          ? (baseRound > 2 ? getLottoNumbersByRound(baseRound - 2)?.numbers || [] : [])
+          : (latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : []);
+      const numbersCompareSlot3 =
+        sourceType === 'WINNING'
+          ? (baseRound > 3 ? getLottoNumbersByRound(baseRound - 3)?.numbers || [] : [])
+          : (latestRound > 2 ? getLottoNumbersByRound(latestRound - 2)?.numbers || [] : []);
 
       const primeNumbers = nums.filter((n) => PRIME_SET_WITH_ONE.has(n));
       const compositeNumbers = nums.filter((n) => !PRIME_SET_WITH_ONE.has(n));
@@ -1108,9 +1156,10 @@ export default function App() {
         sourceType,
         sourceIndex,
         baseRound: targetBaseRound,
-        numbersThisWeek,
-        numbers1WeekAgo,
-        numbers2WeeksAgo,
+        prevRoundComparison,
+        numbersCompareSlot1,
+        numbersCompareSlot2,
+        numbersCompareSlot3,
         rank3Count,
         rank4Count,
         rank5Count,
@@ -1230,22 +1279,42 @@ export default function App() {
   const navigateWinningAnalysis = async (targetRound) => {
     if (targetRound < 1 || targetRound > latestRound) return;
     let roundData = getLottoNumbersByRound(targetRound);
+    let updatedCache = { ...lottoCache };
+    let cacheModified = false;
 
     if (roundData.isPending) {
       const fetched = await fetchLottoRoundWithFallback(targetRound);
       if (fetched) {
         roundData = { ...fetched, isPending: false };
-        const updated = { ...lottoCache, [fetched.drwNo]: roundData };
-        setLottoCache(updated);
-        await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
+        updatedCache[fetched.drwNo] = roundData;
+        cacheModified = true;
       }
+    }
+
+    // 직전 회차(targetRound - 1) 비교 데이터도 미수신 상태면 함께 수신
+    if (targetRound > 1) {
+      const prevData = getLottoNumbersByRound(targetRound - 1);
+      if (prevData.isPending) {
+        const fetchedPrev = await fetchLottoRoundWithFallback(targetRound - 1);
+        if (fetchedPrev) {
+          updatedCache[fetchedPrev.drwNo] = { ...fetchedPrev, isPending: false };
+          cacheModified = true;
+        }
+      }
+    }
+
+    if (cacheModified) {
+      setLottoCache(updatedCache);
+      await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updatedCache));
     }
 
     const result = calculateNumbersAnalysis(
       roundData.numbers,
       targetRound,
       `제 ${targetRound}회 당첨번호 정밀 분석`,
-      `제${targetRound}회 당시 공식 기준 심층 데이터 분석`,
+      targetRound > 1
+        ? `제${targetRound}회 당첨결과 및 직전 제${targetRound - 1}회 비교 분석`
+        : `제1회 첫 추첨 공식 당첨결과 심층 분석`,
       roundData.bnusNo,
       'WINNING',
       targetRound
@@ -1979,7 +2048,6 @@ export default function App() {
   };
 
   const latestWinningInfo = getLottoNumbersByRound(latestRound);
-  const recent3WeeksData = getDynamicContextData();
   const analytics10 = get10ExclusionAnalytics();
 
   return (
@@ -2885,7 +2953,9 @@ export default function App() {
                             roundData.numbers,
                             r,
                             `제 ${r}회 당첨번호 정밀 분석`,
-                            `제${r}회 당시 공식 기준 심층 데이터 분석`,
+                            r > 1
+                              ? `제${r}회 당첨결과 및 직전 제${r - 1}회 비교 분석`
+                              : `제1회 첫 추첨 공식 당첨결과 심층 분석`,
                             roundData.bnusNo,
                             'WINNING',
                             r
@@ -2935,7 +3005,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* [모달 7] 정밀 분석 대시보드 (Z-Score 회귀 주기 분석 및 15쌍 궁합 랭킹 완벽 탑재) */}
+      {/* [모달 7] 정밀 분석 대시보드 (당첨번호: 직전 회차 비교 / 저장번호: 최신 당첨기준 분석 차별화) */}
       <Modal
         visible={isAnalysisModalVisible}
         animationType="slide"
@@ -3105,7 +3175,133 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 2. 로또 용지 마킹 패턴표 */}
+                {/* [당첨번호 전용 섹션] 직전 회차(N-1회) 대비 당첨 흐름 비교 카드 */}
+                {analysisTargetData.sourceType === 'WINNING' && (
+                  <View style={styles.prevRoundCompareCard}>
+                    <View style={styles.prevRoundCompareHeader}>
+                      <Text style={styles.prevRoundCompareTitle}>
+                        🔄 직전 회차 대비 당첨 흐름 비교
+                      </Text>
+                      {analysisTargetData.prevRoundComparison && (
+                        <Text style={styles.prevRoundCompareSubDate}>
+                          제{analysisTargetData.prevRoundComparison.prevRoundNo}회 ({analysisTargetData.prevRoundComparison.prevDate}) ➔ 제{analysisTargetData.sourceIndex}회
+                        </Text>
+                      )}
+                    </View>
+
+                    {analysisTargetData.prevRoundComparison ? (
+                      <>
+                        {/* 직전 회차 당첨번호 볼 표시 (이월수 하이라이트) */}
+                        <View style={styles.prevRoundBallsBox}>
+                          <Text style={styles.prevRoundBallsLabel}>
+                            직전 제{analysisTargetData.prevRoundComparison.prevRoundNo}회 번호:
+                          </Text>
+                          <View style={styles.prevRoundBallsRow}>
+                            {analysisTargetData.prevRoundComparison.prevNumbers.map((pn) => {
+                              const isCarry = analysisTargetData.prevRoundComparison.carryOverNumbers.includes(pn);
+                              return (
+                                <View
+                                  key={`prev-b-${pn}`}
+                                  style={[
+                                    styles.prevMiniBall,
+                                    { backgroundColor: getBallColor(pn) },
+                                    isCarry && styles.prevCarryHighlight,
+                                  ]}
+                                >
+                                  <Text style={styles.prevMiniBallText}>{pn}</Text>
+                                </View>
+                              );
+                            })}
+                            {analysisTargetData.prevRoundComparison.prevBonus && (
+                              <>
+                                <Text style={styles.prevPlusText}>+</Text>
+                                <View
+                                  style={[
+                                    styles.prevMiniBall,
+                                    { backgroundColor: getBallColor(analysisTargetData.prevRoundComparison.prevBonus) },
+                                    analysisTargetData.prevRoundComparison.bonusPromoted && styles.prevCarryHighlight,
+                                  ]}
+                                >
+                                  <Text style={styles.prevMiniBallText}>
+                                    {analysisTargetData.prevRoundComparison.prevBonus}
+                                  </Text>
+                                </View>
+                              </>
+                            )}
+                          </View>
+                        </View>
+
+                        {/* 직전 회차 대비 핵심 변화 4대 지표 */}
+                        <View style={styles.prevCompareGrid}>
+                          <View style={styles.prevCompareItem}>
+                            <Text style={styles.prevCompareItemLabel}>이월수 (직전 동일번호)</Text>
+                            <Text style={[styles.prevCompareItemVal, { color: '#dc2626' }]}>
+                              {analysisTargetData.prevRoundComparison.carryOverNumbers.length > 0
+                                ? `${analysisTargetData.prevRoundComparison.carryOverNumbers.join(', ')} (${analysisTargetData.prevRoundComparison.carryOverNumbers.length}개)`
+                                : '없음 (0개)'}
+                            </Text>
+                            {analysisTargetData.prevRoundComparison.bonusPromoted && (
+                              <Text style={styles.prevBonusPromoTag}>
+                                ★ 직전 보너스({analysisTargetData.prevRoundComparison.prevBonus}번) 당첨 승격
+                              </Text>
+                            )}
+                          </View>
+
+                          <View style={styles.prevCompareItem}>
+                            <Text style={styles.prevCompareItemLabel}>이웃수 (직전 번호 ±1)</Text>
+                            <Text style={[styles.prevCompareItemVal, { color: '#2563eb' }]}>
+                              {analysisTargetData.prevRoundComparison.neighborHits.length > 0
+                                ? `${analysisTargetData.prevRoundComparison.neighborHits.join(', ')} (${analysisTargetData.prevRoundComparison.neighborHits.length}개)`
+                                : '없음 (0개)'}
+                            </Text>
+                          </View>
+
+                          <View style={styles.prevCompareItem}>
+                            <Text style={styles.prevCompareItemLabel}>번호 총합 증감</Text>
+                            <Text style={styles.prevCompareItemVal}>
+                              {analysisTargetData.prevRoundComparison.prevSum} ➔ {analysisTargetData.sum}{' '}
+                              <Text
+                                style={{
+                                  color:
+                                    analysisTargetData.prevRoundComparison.sumDiff > 0
+                                      ? '#dc2626'
+                                      : analysisTargetData.prevRoundComparison.sumDiff < 0
+                                      ? '#0284c7'
+                                      : '#475569',
+                                }}
+                              >
+                                ({analysisTargetData.prevRoundComparison.sumDiff > 0
+                                  ? `+${analysisTargetData.prevRoundComparison.sumDiff} ▲`
+                                  : analysisTargetData.prevRoundComparison.sumDiff < 0
+                                  ? `${analysisTargetData.prevRoundComparison.sumDiff} ▼`
+                                  : '변동없음'})
+                              </Text>
+                            </Text>
+                          </View>
+
+                          <View style={styles.prevCompareItem}>
+                            <Text style={styles.prevCompareItemLabel}>홀짝 / 고저 변화</Text>
+                            <Text style={styles.prevCompareItemVal}>
+                              홀짝 {analysisTargetData.prevRoundComparison.prevOdd}:{analysisTargetData.prevRoundComparison.prevEven} ➔{' '}
+                              <Text style={{ color: '#059669' }}>
+                                {analysisTargetData.oddCount}:{analysisTargetData.evenCount}
+                              </Text>
+                            </Text>
+                            <Text style={styles.prevCompareItemSub}>
+                              고저 {analysisTargetData.prevRoundComparison.prevLow}:{analysisTargetData.prevRoundComparison.prevHigh} ➔ {analysisTargetData.lowCount}:{analysisTargetData.highCount}
+                            </Text>
+                          </View>
+                        </View>
+                      </>
+                    ) : (
+                      <Text style={styles.prevRoundEmptyNotice}>
+                        제1회차는 직전 회차 데이터가 존재하지 않습니다.
+                      </Text>
+                    )}
+                  </View>
+                )}
+
+                {/* 2. 로또 용지 마킹 패턴표 (당첨번호: 직전 1~3회 전 비교 / 저장번호: 이번주~2주 전 비교) */}
                 <View style={styles.analysisSectionCard}>
                   <View style={styles.slipCardHeader}>
                     <Text style={styles.analysisSectionTitle}>
@@ -3113,13 +3309,15 @@ export default function App() {
                     </Text>
                     <Text style={styles.slipSubDesc}>
                       {analysisTargetData.sourceType === 'WINNING'
-                        ? `제${analysisTargetData.sourceIndex}회 기준 순수 6개 번호 및 직전 주차 비교`
-                        : `최신 제${latestRound}회 기준 순수 6개 번호 및 직전 주차 비교`}
+                        ? `제${analysisTargetData.sourceIndex}회 마킹 번호와 직전 1~3회차 이동 경로 오버레이 비교`
+                        : `저장 번호 6개와 최신 제${latestRound}회 기준 직전 3주 당첨번호 비교`}
                     </Text>
                   </View>
 
                   <View style={styles.patternToggleControlRow}>
-                    <Text style={styles.patternToggleControlLabel}>주차 비교:</Text>
+                    <Text style={styles.patternToggleControlLabel}>
+                      {analysisTargetData.sourceType === 'WINNING' ? '이전회차:' : '주차비교:'}
+                    </Text>
 
                     <TouchableOpacity
                       style={[styles.patternToggleBtn, showPatternThisWeek && styles.patternToggleBtn1Active]}
@@ -3127,7 +3325,7 @@ export default function App() {
                       activeOpacity={0.75}
                     >
                       <Text style={[styles.patternToggleBtnText, showPatternThisWeek && styles.patternToggleBtnTextActive]}>
-                        🔴 {analysisTargetData.sourceType === 'WINNING' ? '당시회차' : '이번주'} {showPatternThisWeek ? 'ON' : 'OFF'}
+                        🔴 {analysisTargetData.sourceType === 'WINNING' ? '직전(1회전)' : '이번주'} {showPatternThisWeek ? 'ON' : 'OFF'}
                       </Text>
                     </TouchableOpacity>
 
@@ -3137,7 +3335,7 @@ export default function App() {
                       activeOpacity={0.75}
                     >
                       <Text style={[styles.patternToggleBtnText, showPattern1WeekAgo && styles.patternToggleBtnTextActive]}>
-                        🔵 1주 전 {showPattern1WeekAgo ? 'ON' : 'OFF'}
+                        🔵 {analysisTargetData.sourceType === 'WINNING' ? '2회 전' : '1주 전'} {showPattern1WeekAgo ? 'ON' : 'OFF'}
                       </Text>
                     </TouchableOpacity>
 
@@ -3147,7 +3345,7 @@ export default function App() {
                       activeOpacity={0.75}
                     >
                       <Text style={[styles.patternToggleBtnText, showPattern2WeeksAgo && styles.patternToggleBtnTextActive]}>
-                        🟢 2주 전 {showPattern2WeeksAgo ? 'ON' : 'OFF'}
+                        🟢 {analysisTargetData.sourceType === 'WINNING' ? '3회 전' : '2주 전'} {showPattern2WeeksAgo ? 'ON' : 'OFF'}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -3163,9 +3361,9 @@ export default function App() {
 
                           const isHit = analysisTargetData.numbers.includes(num);
 
-                          const hitThisWeek = showPatternThisWeek && analysisTargetData.numbersThisWeek?.includes(num);
-                          const hit1WeekAgo = showPattern1WeekAgo && analysisTargetData.numbers1WeekAgo?.includes(num);
-                          const hit2WeeksAgo = showPattern2WeeksAgo && analysisTargetData.numbers2WeeksAgo?.includes(num);
+                          const hitSlot1 = showPatternThisWeek && analysisTargetData.numbersCompareSlot1?.includes(num);
+                          const hitSlot2 = showPattern1WeekAgo && analysisTargetData.numbersCompareSlot2?.includes(num);
+                          const hitSlot3 = showPattern2WeeksAgo && analysisTargetData.numbersCompareSlot3?.includes(num);
 
                           return (
                             <View
@@ -3187,9 +3385,9 @@ export default function App() {
                               {isHit && <View style={styles.slipCheckBar} />}
 
                               <View style={styles.overlayDotContainer}>
-                                {hitThisWeek && <View style={styles.overlayDotRed} />}
-                                {hit1WeekAgo && <View style={styles.overlayDotBlue} />}
-                                {hit2WeeksAgo && <View style={styles.overlayDotGreen} />}
+                                {hitSlot1 && <View style={styles.overlayDotRed} />}
+                                {hitSlot2 && <View style={styles.overlayDotBlue} />}
+                                {hitSlot3 && <View style={styles.overlayDotGreen} />}
                               </View>
                             </View>
                           );
@@ -3248,7 +3446,9 @@ export default function App() {
                   </View>
                   <View style={styles.metricItem}>
                     <Text style={styles.metricLabel}>
-                      {analysisTargetData.sourceType === 'WINNING' ? '전회차 이월수' : '최신 당첨 일치수'}
+                      {analysisTargetData.sourceType === 'WINNING'
+                        ? `직전 제${Math.max(1, analysisTargetData.sourceIndex - 1)}회 이월수`
+                        : `최신 제${latestRound}회 일치수`}
                     </Text>
                     <Text style={[styles.metricValue, { color: '#dc2626' }]}>
                       {analysisTargetData.carryOverNumbers.length > 0
@@ -3280,7 +3480,7 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* 4. 특수수 및 핵심 패턴 심층 지표 (끝수 다양성 지표 통합) */}
+                {/* 4. 특수수 및 핵심 패턴 심층 지표 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🔍 특수수 및 핵심 패턴 심층 지표
@@ -3423,13 +3623,13 @@ export default function App() {
                   ))}
                 </View>
 
-                {/* [신규 고급 분석 섹션] 번호별 회귀 주기 Z-Score(출현 임박도) 통계 */}
+                {/* [고급 분석 섹션] 번호별 회귀 주기 Z-Score(출현 임박도) 통계 */}
                 <View style={styles.analysisSectionCard}>
                   <Text style={styles.analysisSectionTitle}>
                     🎯 번호별 회귀 주기 Z-Score 통계 (출현 임박 지수)
                   </Text>
                   <Text style={styles.pairTableSubGuide}>
-                    * 고유 평균 주기($\mu$)와 표준편차($\sigma$) 기반 정규화 지수 ($Z \ge 1.5$: 임계점 도달)
+                    * 고유 평균 주기(μ)와 표준편차(σ) 기반 정규화 지수 (Z ≥ 1.5: 임계점 도달)
                   </Text>
 
                   <View style={styles.tableHeader}>
@@ -3458,7 +3658,7 @@ export default function App() {
                           {zItem.mean}주 (±{zItem.stdDev})
                         </Text>
                         <Text style={[styles.tdText, { width: '24%', fontWeight: 'bold', color: zItem.color }]}>
-                          {zItem.zVal > 0 ? `+${zItem.zVal}` : zItem.zVal}
+                          {Number(zItem.zVal) > 0 ? `+${zItem.zVal}` : zItem.zVal}
                         </Text>
                         <Text style={[styles.tdText, { width: '28%', fontWeight: 'bold', color: zItem.color }]}>
                           {zItem.status}
@@ -3944,6 +4144,115 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#dc2626',
+  },
+
+  // [당첨번호 전용] 직전 회차 비교 카드 스타일
+  prevRoundCompareCard: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1.5,
+    borderColor: '#bfdbfe',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+  },
+  prevRoundCompareHeader: {
+    marginBottom: 6,
+  },
+  prevRoundCompareTitle: {
+    fontSize: 12.5,
+    fontWeight: '900',
+    color: '#1e3a8a',
+  },
+  prevRoundCompareSubDate: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#3b82f6',
+    marginTop: 2,
+  },
+  prevRoundBallsBox: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    marginBottom: 8,
+  },
+  prevRoundBallsLabel: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#475569',
+    marginBottom: 4,
+  },
+  prevRoundBallsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  prevMiniBall: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  prevCarryHighlight: {
+    borderWidth: 2.5,
+    borderColor: '#dc2626',
+    transform: [{ scale: 1.08 }],
+  },
+  prevMiniBallText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  prevPlusText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#94a3b8',
+    marginHorizontal: 2,
+  },
+  prevCompareGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  prevCompareItem: {
+    width: '48.8%',
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    padding: 7,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  prevCompareItemLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    marginBottom: 2,
+  },
+  prevCompareItemVal: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  prevCompareItemSub: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#475569',
+    marginTop: 2,
+  },
+  prevBonusPromoTag: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#d97706',
+    marginTop: 2,
+  },
+  prevRoundEmptyNotice: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
+    paddingVertical: 4,
   },
 
   manualTopOptionBtn: {
