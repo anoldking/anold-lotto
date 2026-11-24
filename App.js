@@ -68,6 +68,7 @@ const INITIAL_LATEST_ROUND = Math.max(
 
 const STORAGE_KEY = '@my_saved_lotto_sets';
 const PREFS_STORAGE_KEY = '@lotto_number_prefs_v1'; // 제외수·고정수 저장
+const SAVED_VIEW_MODE_KEY = '@lotto_saved_view_mode'; // 보관함 보기 방식
 const BACKUP_APP_ID = 'anold-lotto-backup';
 const MAX_FIXED_NUMBERS = 5;
 const CACHE_STORAGE_KEY = '@lotto_cache_v4_official';
@@ -738,6 +739,7 @@ export default function App() {
   const [qrResultData, setQrResultData] = useState(null);
 
   const [savedSets, setSavedSets] = useState([]);
+  const [savedViewMode, setSavedViewMode] = useState('ALL'); // [신규] 'ALL' 전체 묶어 보기 | 'DATE' 일자별 보기
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
 
@@ -2097,7 +2099,18 @@ export default function App() {
     AsyncStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify({ excludedNumbers, fixedNumbers })).catch(() => {});
   }, [excludedNumbers, fixedNumbers]);
 
+  const changeSavedViewMode = (mode) => {
+    setSavedViewMode(mode);
+    AsyncStorage.setItem(SAVED_VIEW_MODE_KEY, mode).catch(() => {});
+  };
+
   const loadSavedSets = async () => {
+    try {
+      const mode = await AsyncStorage.getItem(SAVED_VIEW_MODE_KEY);
+      if (mode === 'ALL' || mode === 'DATE') setSavedViewMode(mode);
+    } catch (e) {
+      console.log('보기 방식 로드 실패:', e);
+    }
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEY);
       if (data) setSavedSets(JSON.parse(data));
@@ -2477,7 +2490,9 @@ export default function App() {
     const current = item.targetRound;
     Alert.alert(
       '구매 회차 지정',
-      `이 묶음을 어느 회차 결과와 대조할까요?\n현재: ${current ? `제 ${current}회` : '지정 안 됨 (항상 최신 회차와 대조)'}`,
+      `${item.date}에 함께 저장된 ${item.games.length}게임을 어느 회차 결과와 대조할까요?\n현재: ${
+        current ? `제 ${current}회` : '지정 안 됨 (항상 최신 회차와 대조)'
+      }`,
       [
         { text: `제 ${latestRound}회 (이미 추첨됨)`, onPress: () => updateSetTargetRound(item.id, latestRound) },
         { text: `제 ${latestRound + 1}회 (이번 주)`, onPress: () => updateSetTargetRound(item.id, latestRound + 1) },
@@ -2629,6 +2644,159 @@ export default function App() {
             }
           },
         },
+      ]
+    );
+  };
+
+  // [신규] 저장 번호 1게임 화면 (일자별 보기 / 전체 묶어 보기 공용)
+  const renderSavedGameRow = (item, g, gIdx, gameLabel, showMeta = false) => {
+    const compareRound = item.targetRound || latestRound;
+    const compareInfo = getLottoNumbersByRound(compareRound);
+    const compareNumbers = compareInfo.isPending ? [] : compareInfo.numbers;
+    const compareBonus = compareInfo.isPending ? null : compareInfo.bnusNo;
+    const lastResult = compareInfo.isPending
+      ? { rank: `⏳ 제${compareRound}회 추첨 대기`, grade: 0, color: '#b45309', bg: '#fef3c7' }
+      : checkSingleRoundResult(g, compareNumbers, compareBonus);
+    const hist = savedHistoryMap[g.join('-')] || calculateHistoricalWins(g);
+
+    return (
+                      <View key={`saved-${item.id}-${gIdx}`} style={styles.savedGameItem}>
+                        {showMeta && (
+                          <TouchableOpacity
+                            onPress={() => handleChangeTargetRound(item)}
+                            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={styles.allModeMetaText}>
+                              📅 {item.date} ·{' '}
+                              <Text style={{ color: item.targetRound ? '#047857' : '#b45309', fontWeight: '800' }}>
+                                {item.targetRound
+                                  ? `🎯 제${item.targetRound}회용${compareInfo.isPending ? ' (추첨 전)' : ''} ✎`
+                                  : `🎯 회차 미지정 ✎`}
+                              </Text>
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                        <View style={styles.savedRowTop}>
+                          <View style={styles.gameTopLeftGroup}>
+                            <View style={styles.miniBadge}>
+                              <Text style={styles.miniBadgeText}>{gameLabel}</Text>
+                            </View>
+                            <View style={[styles.resultBadge, { backgroundColor: lastResult.bg }]}>
+                              <Text style={[styles.resultBadgeText, { color: lastResult.color }]}>
+                                {lastResult.rank}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                            <TouchableOpacity
+                              style={styles.optimizeAffinBtn}
+                              onPress={() => handleOptimizeSavedGameCompatibility(item.id, gIdx)}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.optimizeAffinBtnText}>⚡ 궁합대체</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={styles.analysisSmallBtn}
+                              onPress={() => {
+                                const flatList = getFlatSavedGames();
+                                const foundIdx = flatList.findIndex((fg) => fg.id === item.id && fg.gIdx === gIdx);
+                                const analysisResult = calculateNumbersAnalysis(
+                                  g,
+                                  latestRound,
+                                  `저장 번호 정밀 분석 (${gameLabel})`,
+                                  `저장일시: ${item.date} | 최신 제${latestRound}회 공식 기준 심층 분석`,
+                                  null,
+                                  'SAVED',
+                                  foundIdx !== -1 ? foundIdx : 0
+                                );
+                                setAnalysisTargetData(analysisResult);
+                                setIsAnalysisModalVisible(true);
+                              }}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.analysisSmallBtnText}>📊 정밀분석</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={styles.singleGameDeleteTouch}
+                              onPress={() => handleDeleteSingleGame(item.id, gIdx)}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.singleGameDeleteText}>✕ 삭제</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+
+                        <View style={styles.savedBallsRow}>
+                          {g.map((n) => {
+                            const isMatched = compareNumbers.includes(n);
+                            const isBonusMatched = compareBonus !== null && n === compareBonus;
+                            return (
+                              <View
+                                key={`s-ball-${n}`}
+                                style={[
+                                  styles.miniBall,
+                                  { backgroundColor: getBallColor(n) },
+                                  isMatched && styles.matchedBallHighlight,
+                                  isBonusMatched && styles.bonusBallHighlight,
+                                ]}
+                              >
+                                <Text style={styles.miniBallText}>{n}</Text>
+                                {isMatched && <Text style={styles.matchMark}>✓</Text>}
+                                {isBonusMatched && <Text style={styles.bonusMark}>B</Text>}
+                              </View>
+                            );
+                          })}
+                        </View>
+
+                        <View style={styles.historyStatsBox}>
+                          <Text style={styles.historyStatsTitle}>
+                            📊 동행복권 누적 당첨 횟수:
+                            <Text style={styles.historyTotalText}> 총 {hist.total}회</Text>
+                          </Text>
+                          <Text style={styles.historyDetailText}>
+                            (1등: {hist.r1}회 / 2등: {hist.r2}회 / 3등: {hist.r3}회 / 4등: {hist.r4}회 / 5등: {hist.r5}회)
+                          </Text>
+                        </View>
+                      </View>
+    );
+  };
+
+  // [신규] 전체 묶어 보기용 목록 (최신 저장 순으로 1, 2, 3… 번호)
+  const allSavedGamesFlat = useMemo(() => {
+    const list = [];
+    savedSets.forEach((item) => {
+      item.games.forEach((g, gIdx) => list.push({ item, g, gIdx }));
+    });
+    return list;
+  }, [savedSets]);
+
+  // [신규] 전체 구매 회차 한 번에 바꾸기
+  const handleChangeAllTargetRound = () => {
+    const applyAll = async (round) => {
+      const updated = savedSets.map((item) => ({ ...item, targetRound: round }));
+      setSavedSets(updated);
+      try {
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        Alert.alert('변경 완료', `저장된 번호 ${totalSavedGamesCount}게임을 모두 제 ${round}회용으로 바꿨습니다.`);
+      } catch (e) {
+        Alert.alert('저장 실패', '구매 회차를 바꾸는 중 오류가 발생했습니다.');
+      }
+    };
+    Alert.alert(
+      '전체 구매 회차 바꾸기',
+      `저장된 번호 ${totalSavedGamesCount}게임 전부를 어느 회차와 대조할까요?\n(QR로 담은 번호도 함께 바뀌어요)`,
+      [
+        { text: `제 ${latestRound}회 (이미 추첨됨)`, onPress: () => applyAll(latestRound) },
+        { text: `제 ${latestRound + 1}회 (이번 주)`, onPress: () => applyAll(latestRound + 1) },
+        { text: `제 ${latestRound + 2}회 (다음 주)`, onPress: () => applyAll(latestRound + 2) },
+        { text: '취소', style: 'cancel' },
       ]
     );
   };
@@ -2894,11 +3062,56 @@ export default function App() {
             </View>
           )}
 
+          {savedSets.length > 0 && (
+            <View style={styles.savedViewToggleRow}>
+              <TouchableOpacity
+                style={[styles.savedViewToggleBtn, savedViewMode === 'ALL' && styles.savedViewToggleBtnActive]}
+                onPress={() => changeSavedViewMode('ALL')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.savedViewToggleText, savedViewMode === 'ALL' && styles.savedViewToggleTextActive]}>
+                  📦 전체 묶어 보기
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.savedViewToggleBtn, savedViewMode === 'DATE' && styles.savedViewToggleBtnActive]}
+                onPress={() => changeSavedViewMode('DATE')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.savedViewToggleText, savedViewMode === 'DATE' && styles.savedViewToggleTextActive]}>
+                  📅 일자별 보기
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           <ScrollView style={styles.fullScreenScroll} showsVerticalScrollIndicator={false}>
             {savedSets.length === 0 ? (
               <View style={styles.emptyBox}>
                 <Text style={styles.emptyText}>저장된 로또 번호가 없습니다.</Text>
                 <Text style={styles.emptySubText}>번호를 생성한 후 '기기에 저장'을 눌러보세요!</Text>
+              </View>
+            ) : savedViewMode === 'ALL' ? (
+              // [신규] 📦 전체 묶어 보기: 저장 날짜와 상관없이 한 카드에 모두 표시
+              <View style={styles.savedCard}>
+                <View style={styles.savedCardHeader}>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={[styles.savedDate, { color: '#0f172a', fontWeight: '900' }]}>
+                      📦 전체 저장 번호 {totalSavedGamesCount}게임 (최근 저장 순)
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.targetRoundBadge}
+                      onPress={handleChangeAllTargetRound}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.targetRoundBadgeText}>🎯 전체 구매 회차 한 번에 바꾸기 ✎</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                {allSavedGamesFlat.map(({ item, g, gIdx }, idx) =>
+                  renderSavedGameRow(item, g, gIdx, `${idx + 1}`, true)
+                )}
               </View>
             ) : (
               savedSets.map((item) => {
@@ -2946,105 +3159,9 @@ export default function App() {
                     </TouchableOpacity>
                   </View>
 
-                  {item.games.map((g, gIdx) => {
-                    const lastResult = compareInfo.isPending
-                      ? { rank: `⏳ 제${compareRound}회 추첨 대기`, grade: 0, color: '#b45309', bg: '#fef3c7' }
-                      : checkSingleRoundResult(g, compareNumbers, compareBonus);
-                    const hist = savedHistoryMap[g.join('-')] || calculateHistoricalWins(g);
-                    const gameLabel = item.games.length === 1 ? '수동' : gameLabels[gIdx];
-
-                    return (
-                      <View key={`saved-${item.id}-${gIdx}`} style={styles.savedGameItem}>
-                        <View style={styles.savedRowTop}>
-                          <View style={styles.gameTopLeftGroup}>
-                            <View style={styles.miniBadge}>
-                              <Text style={styles.miniBadgeText}>{gameLabel}</Text>
-                            </View>
-                            <View style={[styles.resultBadge, { backgroundColor: lastResult.bg }]}>
-                              <Text style={[styles.resultBadgeText, { color: lastResult.color }]}>
-                                {lastResult.rank}
-                              </Text>
-                            </View>
-                          </View>
-
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                            <TouchableOpacity
-                              style={styles.optimizeAffinBtn}
-                              onPress={() => handleOptimizeSavedGameCompatibility(item.id, gIdx)}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                              activeOpacity={0.7}
-                            >
-                              <Text style={styles.optimizeAffinBtnText}>⚡ 궁합대체</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                              style={styles.analysisSmallBtn}
-                              onPress={() => {
-                                const flatList = getFlatSavedGames();
-                                const foundIdx = flatList.findIndex((fg) => fg.id === item.id && fg.gIdx === gIdx);
-                                const analysisResult = calculateNumbersAnalysis(
-                                  g,
-                                  latestRound,
-                                  `저장 번호 정밀 분석 (${gameLabel})`,
-                                  `저장일시: ${item.date} | 최신 제${latestRound}회 공식 기준 심층 분석`,
-                                  null,
-                                  'SAVED',
-                                  foundIdx !== -1 ? foundIdx : 0
-                                );
-                                setAnalysisTargetData(analysisResult);
-                                setIsAnalysisModalVisible(true);
-                              }}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                              activeOpacity={0.7}
-                            >
-                              <Text style={styles.analysisSmallBtnText}>📊 정밀분석</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                              style={styles.singleGameDeleteTouch}
-                              onPress={() => handleDeleteSingleGame(item.id, gIdx)}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                              activeOpacity={0.7}
-                            >
-                              <Text style={styles.singleGameDeleteText}>✕ 삭제</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-
-                        <View style={styles.savedBallsRow}>
-                          {g.map((n) => {
-                            const isMatched = compareNumbers.includes(n);
-                            const isBonusMatched = compareBonus !== null && n === compareBonus;
-                            return (
-                              <View
-                                key={`s-ball-${n}`}
-                                style={[
-                                  styles.miniBall,
-                                  { backgroundColor: getBallColor(n) },
-                                  isMatched && styles.matchedBallHighlight,
-                                  isBonusMatched && styles.bonusBallHighlight,
-                                ]}
-                              >
-                                <Text style={styles.miniBallText}>{n}</Text>
-                                {isMatched && <Text style={styles.matchMark}>✓</Text>}
-                                {isBonusMatched && <Text style={styles.bonusMark}>B</Text>}
-                              </View>
-                            );
-                          })}
-                        </View>
-
-                        <View style={styles.historyStatsBox}>
-                          <Text style={styles.historyStatsTitle}>
-                            📊 동행복권 누적 당첨 횟수:
-                            <Text style={styles.historyTotalText}> 총 {hist.total}회</Text>
-                          </Text>
-                          <Text style={styles.historyDetailText}>
-                            (1등: {hist.r1}회 / 2등: {hist.r2}회 / 3등: {hist.r3}회 / 4등: {hist.r4}회 / 5등: {hist.r5}회)
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  })}
+                  {item.games.map((g, gIdx) =>
+                    renderSavedGameRow(item, g, gIdx, item.games.length === 1 ? '수동' : gameLabels[gIdx], false)
+                  )}
                 </View>
                 );
               })
@@ -6510,6 +6627,33 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0f172a',
   },
+  // [신규] 보관함 보기 방식
+  savedViewToggleRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginHorizontal: 16,
+    marginBottom: 10,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    padding: 4,
+  },
+  savedViewToggleBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  savedViewToggleBtnActive: {
+    backgroundColor: '#ffffff',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 2,
+  },
+  savedViewToggleText: { fontSize: 12.5, fontWeight: '700', color: '#64748b' },
+  savedViewToggleTextActive: { color: '#0f172a', fontWeight: '900' },
+  allModeMetaText: { fontSize: 10.5, color: '#64748b', marginBottom: 4 },
   // [신규] 추천 필터 버튼
   recommendedOptionBtn: {
     backgroundColor: '#047857',
