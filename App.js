@@ -160,6 +160,27 @@ const isEssentialValid = (numbers) => {
   return true;
 };
 
+// -----------------------------------------------------------------
+// [신규] 인기 패턴 검사: 많은 사람이 고르는 조합은 1등 당첨금을 여러 명이 나눠 가질 위험이 큼
+// (당첨 확률은 같지만, 당첨됐을 때 받는 돈을 지키는 통계적으로 근거 있는 방법)
+// -----------------------------------------------------------------
+const getPopularPatternReason = (numbers, pastComboSet = null) => {
+  const sorted = [...numbers].sort((a, b) => a - b);
+  if (sorted.length !== 6) return null;
+  if (sorted[5] <= 31) return '생일·기념일 숫자(1~31)만 사용';
+  const step = sorted[1] - sorted[0];
+  if (sorted.every((n, i) => i === 0 || n - sorted[i - 1] === step)) return `일정 간격(${step}씩) 수열`;
+  if (sorted.every((n) => n % 7 === 0)) return '7의 배수만 사용';
+  const { rowCounts, colCounts } = getPaperDeadPattern(sorted);
+  if (rowCounts.some((c) => c >= 4)) return '용지 가로줄 한 줄에 4개 이상';
+  if (colCounts.some((c) => c >= 4)) return '용지 세로줄 한 줄에 4개 이상';
+  const diagA = sorted.filter((n) => (n - 1) % 8 === 0).length; // 1, 9, 17, 25, 33, 41 (↘ 대각선)
+  const diagB = sorted.filter((n) => n >= 7 && n <= 43 && (n - 7) % 6 === 0).length; // 7, 13, 19, 25, 31, 37, 43 (↙ 대각선)
+  if (diagA >= 4 || diagB >= 4) return '용지 대각선에 4개 이상';
+  if (pastComboSet && pastComboSet.has(sorted.join('-'))) return '과거 당첨번호와 똑같은 조합';
+  return null;
+};
+
 // [고급 필터 1] 끝수 다양성(4~6개) 및 이웃수(1~3개) 포함 12대 정밀 검증기
 const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   const sorted = [...numbers].sort((a, b) => a - b);
@@ -238,6 +259,9 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   if (deadRows < 2 || deadRows > 4) return false;
   if (deadCols < 2 || deadCols > 4) return false;
 
+  // [신규] 인기 패턴(당첨금 나눠 가질 위험이 큰 조합) 회피
+  if (getPopularPatternReason(sorted, dynamicContext?.pastComboSet)) return false;
+
   if (dynamicContext) {
     const { round1Numbers, doubleCarryOver, neighborSet } = dynamicContext;
 
@@ -299,6 +323,167 @@ const sanitizeNumberList = (list, max = 45) =>
     : [];
 // 아직 불러오지 못한 회차를 화면에 '?'로 표시하기 위한 자리표시
 const PENDING_BALL_SLOTS = [0, 0, 0, 0, 0, 0];
+
+// -----------------------------------------------------------------
+// [개선] 10대 제외수 알고리즘 (특정 기준 회차까지의 데이터만 사용 → 과거 검증에도 재사용)
+// -----------------------------------------------------------------
+const ALL_NUMBERS = Array.from({ length: 45 }, (_, i) => i + 1);
+
+const getRoundFromCache = (cache, round) => {
+  const d = cache[round];
+  return d && !d.isPending && Array.isArray(d.numbers) && d.numbers.length === 6 ? d : null;
+};
+
+// 정밀 필터와 같은 구간 기준: 1~9 / 10~19 / 20~29 / 30~39 / 40~45
+const getSectionIndex = (n) => (n <= 9 ? 0 : n <= 19 ? 1 : n <= 29 ? 2 : n <= 39 ? 3 : 4);
+
+const EXCLUSION_ALGOS = [
+  { key: 'algo1_LongCold', label: '① 장기 미출현' },
+  { key: 'algo2_ShortCold', label: '② 단기 미출현' },
+  { key: 'algo3_LowFreq', label: '③ 저출현 빈도' },
+  { key: 'algo4_Overheated', label: '④ 과다 출현수' },
+  { key: 'algo5_Neighbor', label: '⑤ 직전 이웃수' },
+  { key: 'algo6_Trend', label: '⑥ 최근 연속추세' },
+  { key: 'algo7_SameEnd', label: '⑦ 끝수 과밀 편중' },
+  { key: 'algo8_Section', label: '⑧ 구간 과밀 편중' },
+  { key: 'algo9_LastDraw', label: '⑨ 직전 회차 전체' },
+  { key: 'algo10_TopScores', label: '⑩ 종합 점수 상위' },
+];
+
+const computeExclusionAnalytics = (cache, baseRound) => {
+  const round0 = getRoundFromCache(cache, baseRound)?.numbers || [];
+  const round1 = baseRound > 1 ? getRoundFromCache(cache, baseRound - 1)?.numbers || [] : [];
+
+  const counts5 = {};
+  const counts10 = {};
+  const counts30 = {};
+  const absenceWeeks = {};
+  ALL_NUMBERS.forEach((n) => {
+    counts5[n] = 0;
+    counts10[n] = 0;
+    counts30[n] = 0;
+  });
+
+  // [수정] 최근 30회(기준 회차 포함)만 집계
+  for (let r = baseRound; r >= Math.max(1, baseRound - 29); r--) {
+    const d = getRoundFromCache(cache, r);
+    if (!d) continue;
+    const diff = baseRound - r;
+    d.numbers.forEach((n) => {
+      if (diff < 5) counts5[n]++;
+      if (diff < 10) counts10[n]++;
+      counts30[n]++;
+    });
+  }
+
+  ALL_NUMBERS.forEach((n) => {
+    let gap = 0;
+    for (let r = baseRound; r >= 1; r--) {
+      const d = getRoundFromCache(cache, r);
+      if (d && d.numbers.includes(n)) break;
+      gap++;
+    }
+    absenceWeeks[n] = gap;
+  });
+
+  const algo1_LongCold = ALL_NUMBERS.filter((n) => absenceWeeks[n] >= 30);
+  const algo2_ShortCold = ALL_NUMBERS.filter((n) => counts10[n] === 0);
+  const algo3_LowFreq = ALL_NUMBERS.filter((n) => counts30[n] <= 1);
+  const algo4_Overheated = ALL_NUMBERS.filter((n) => counts5[n] >= 3 || counts10[n] >= 4);
+  // [수정] 예전 ⑤는 ⑨(직전 회차)와 똑같은 번호를 뽑던 버그 → '직전 번호 ±1(이웃수)'로 교체
+  const algo5_Neighbor = ALL_NUMBERS.filter(
+    (n) => !round0.includes(n) && (round0.includes(n - 1) || round0.includes(n + 1))
+  );
+  const algo6_Trend = round0.filter((n) => round1.includes(n));
+
+  const digitCounts = {};
+  round0.forEach((n) => {
+    const d = n % 10;
+    digitCounts[d] = (digitCounts[d] || 0) + 1;
+  });
+  const algo7_SameEnd = ALL_NUMBERS.filter((n) => digitCounts[n % 10] >= 2 && !round0.includes(n));
+
+  const secCounts = [0, 0, 0, 0, 0];
+  round0.forEach((n) => secCounts[getSectionIndex(n)]++);
+  const algo8_Section = ALL_NUMBERS.filter((n) => secCounts[getSectionIndex(n)] >= 3);
+
+  const algo9_LastDraw = [...round0].sort((a, b) => a - b);
+
+  // [수정] 미출현 계열(①②③)은 같은 이유로 3번 점수를 받던 문제 → 가장 높은 점수 1개만 반영
+  const scores = {};
+  ALL_NUMBERS.forEach((n) => {
+    scores[n] = Math.max(
+      algo1_LongCold.includes(n) ? 3 : 0,
+      algo2_ShortCold.includes(n) ? 2 : 0,
+      algo3_LowFreq.includes(n) ? 2 : 0
+    );
+  });
+  algo4_Overheated.forEach((n) => (scores[n] += 4));
+  algo5_Neighbor.forEach((n) => (scores[n] += 1));
+  algo6_Trend.forEach((n) => (scores[n] += 5));
+  algo7_SameEnd.forEach((n) => (scores[n] += 3));
+  algo8_Section.forEach((n) => (scores[n] += 2));
+
+  // [수정] 0점 번호는 넣지 않음 (예전엔 작은 번호 1, 2, 3…이 이유 없이 채워졌음)
+  //        점수가 같으면 미출현 기간이 긴 번호 → 번호 순
+  const algo10_TopScores = ALL_NUMBERS.filter((n) => scores[n] > 0)
+    .sort((a, b) => scores[b] - scores[a] || absenceWeeks[b] - absenceWeeks[a] || a - b)
+    .slice(0, 12)
+    .sort((a, b) => a - b);
+
+  return {
+    algo1_LongCold,
+    algo2_ShortCold,
+    algo3_LowFreq,
+    algo4_Overheated,
+    algo5_Neighbor,
+    algo6_Trend,
+    algo7_SameEnd,
+    algo8_Section,
+    algo9_LastDraw,
+    algo10_TopScores,
+  };
+};
+
+const combination = (n, k) => {
+  if (k < 0 || k > n) return 0;
+  let result = 1;
+  for (let i = 1; i <= k; i++) result = (result * (n - k + i)) / i;
+  return result;
+};
+
+// [신규] 효과 검증: 과거 각 회차마다 '그 직전까지의 데이터'로 제외수를 뽑고,
+//        실제 당첨번호가 제외수에 몇 개 걸렸는지 무작위 기대값과 비교
+const runExclusionBacktest = (cache, latestRound, testCount) => {
+  const total = combination(45, 6);
+  const results = {};
+  EXCLUSION_ALGOS.forEach(({ key }) => {
+    results[key] = { rounds: 0, totalExcluded: 0, actualHits: 0, expectedHits: 0, cleanActual: 0, cleanExpected: 0 };
+  });
+
+  let tested = 0;
+  let firstRound = null;
+  for (let t = latestRound; t > latestRound - testCount && t > 31; t--) {
+    const win = getRoundFromCache(cache, t);
+    if (!win || !getRoundFromCache(cache, t - 1)) continue;
+    const analytics = computeExclusionAnalytics(cache, t - 1);
+    tested++;
+    firstRound = t;
+    EXCLUSION_ALGOS.forEach(({ key }) => {
+      const excluded = analytics[key];
+      const k = excluded.length;
+      const hits = win.numbers.filter((n) => excluded.includes(n)).length;
+      const R = results[key];
+      R.rounds++;
+      R.totalExcluded += k;
+      R.actualHits += hits;
+      R.expectedHits += (6 * k) / 45;
+      if (hits === 0) R.cleanActual++;
+      R.cleanExpected += combination(45 - k, 6) / total;
+    });
+  }
+  return { tested, firstRound, lastRound: latestRound, results };
+};
 
 const parseLottoQrUrl = (url) => {
   try {
@@ -477,6 +662,12 @@ export default function App() {
   const [ballPickMode, setBallPickMode] = useState('EXCLUDE'); // 'EXCLUDE' | 'FIXED'
   const prefsLoadedRef = useRef(false);
 
+  // [신규] 제외수 알고리즘 효과 검증
+  const [isBacktestModalVisible, setIsBacktestModalVisible] = useState(false);
+  const [backtestData, setBacktestData] = useState(null);
+  const [backtestCount, setBacktestCount] = useState(100);
+  const [isBacktesting, setIsBacktesting] = useState(false);
+
   // [신규] 백업·복원
   const [isRestoreModalVisible, setIsRestoreModalVisible] = useState(false);
   const [restoreText, setRestoreText] = useState('');
@@ -625,12 +816,20 @@ export default function App() {
       if (num < 45) neighborSet.add(num + 1);
     });
 
+    // 과거 당첨 조합 목록 (똑같은 조합을 다시 고르는 사람이 많음)
+    const pastComboSet = new Set(
+      Object.values(lottoCache)
+        .filter((d) => d && !d.isPending && Array.isArray(d.numbers) && d.numbers.length === 6)
+        .map((d) => [...d.numbers].sort((a, b) => a - b).join('-'))
+    );
+
     return {
       round1Numbers: list1,
       doubleCarryOver,
       neighborSet,
+      pastComboSet,
     };
-  }, [latestRound, getLottoNumbersByRound]);
+  }, [latestRound, getLottoNumbersByRound, lottoCache]);
 
   const generateStrictFilteredSet = useCallback(
     (excluded = [], fixed = []) => {
@@ -653,7 +852,7 @@ export default function App() {
         const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
 
-        if (isEssentialValid(candidate)) {
+        if (isEssentialValid(candidate) && !getPopularPatternReason(candidate, dynamicContext.pastComboSet)) {
           return candidate;
         }
       }
@@ -664,7 +863,7 @@ export default function App() {
         const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
         const sum = candidate.reduce((acc, cur) => acc + cur, 0);
-        if (sum >= 100 && sum <= 180) {
+        if (sum >= 100 && sum <= 180 && !getPopularPatternReason(candidate, dynamicContext.pastComboSet)) {
           return candidate;
         }
       }
@@ -915,99 +1114,26 @@ export default function App() {
     );
   };
 
-  const get10ExclusionAnalytics = useCallback(() => {
-    const round0 = getLottoNumbersByRound(latestRound)?.numbers || [];
-    const round1 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1)?.numbers || [] : [];
+  const get10ExclusionAnalytics = useCallback(
+    () => computeExclusionAnalytics(lottoCache, latestRound),
+    [lottoCache, latestRound]
+  );
 
-    const counts5 = {}, counts10 = {}, counts30 = {}, absenceWeeks = {};
-    for (let i = 1; i <= 45; i++) {
-      counts5[i] = 0;
-      counts10[i] = 0;
-      counts30[i] = 0;
-      absenceWeeks[i] = 0;
-    }
-
-    for (let r = latestRound; r >= Math.max(1, latestRound - 30); r--) {
-      const rData = getLottoNumbersByRound(r);
-      if (rData && rData.numbers && !rData.isPending) {
-        const diff = latestRound - r;
-        rData.numbers.forEach((n) => {
-          if (diff < 5) counts5[n]++;
-          if (diff < 10) counts10[n]++;
-          if (diff < 30) counts30[n]++;
-        });
+  const runBacktest = (count) => {
+    setBacktestCount(count);
+    setIsBacktesting(true);
+    // 계산 중 표시가 먼저 보이도록 살짝 늦게 실행
+    setTimeout(() => {
+      try {
+        const res = runExclusionBacktest(lottoCacheRef.current || lottoCache, latestRound, count);
+        setBacktestData({ ...res, count });
+      } catch (e) {
+        Alert.alert('검증 오류', '과거 데이터를 계산하는 중 문제가 발생했습니다.');
+      } finally {
+        setIsBacktesting(false);
       }
-    }
-
-    for (let i = 1; i <= 45; i++) {
-      let gap = 0;
-      for (let r = latestRound; r >= 1; r--) {
-        const rData = getLottoNumbersByRound(r);
-        if (rData && rData.numbers && !rData.isPending && rData.numbers.includes(i)) break;
-        gap++;
-      }
-      absenceWeeks[i] = gap;
-    }
-
-    const algo1_LongCold = allNumbers.filter((n) => absenceWeeks[n] >= 30);
-    const algo2_ShortCold = allNumbers.filter((n) => counts10[n] === 0);
-    const algo3_LowFreq = allNumbers.filter((n) => counts30[n] <= 1);
-    const algo4_Overheated = allNumbers.filter((n) => counts5[n] >= 3 || counts10[n] >= 4);
-    const algo5_CycleOutlier = allNumbers.filter((n) => absenceWeeks[n] <= 1 && round0.includes(n));
-    const algo6_Trend = round0.filter((n) => round1.includes(n));
-
-    const digitCounts = {};
-    round0.forEach((n) => {
-      const d = n % 10;
-      digitCounts[d] = (digitCounts[d] || 0) + 1;
-    });
-    const algo7_SameEnd = allNumbers.filter((n) => {
-      const d = n % 10;
-      return digitCounts[d] >= 2 && !round0.includes(n);
-    });
-
-    const secCounts = [0, 0, 0, 0, 0];
-    round0.forEach((n) => {
-      const idx = Math.min(4, Math.floor((n - 1) / 10));
-      secCounts[idx]++;
-    });
-    const algo8_Section = allNumbers.filter((n) => {
-      const idx = Math.min(4, Math.floor((n - 1) / 10));
-      return secCounts[idx] >= 3;
-    });
-
-    const algo9_LastDraw = [...round0];
-
-    const scores = {};
-    for (let i = 1; i <= 45; i++) scores[i] = 0;
-
-    algo1_LongCold.forEach((n) => (scores[n] += 3));
-    algo2_ShortCold.forEach((n) => (scores[n] += 2));
-    algo3_LowFreq.forEach((n) => (scores[n] += 2));
-    algo4_Overheated.forEach((n) => (scores[n] += 4));
-    algo6_Trend.forEach((n) => (scores[n] += 5));
-    algo7_SameEnd.forEach((n) => (scores[n] += 3));
-    algo8_Section.forEach((n) => (scores[n] += 2));
-
-    const algo10_TopScores = Object.entries(scores)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 12)
-      .map(([num]) => Number(num))
-      .sort((a, b) => a - b);
-
-    return {
-      algo1_LongCold,
-      algo2_ShortCold,
-      algo3_LowFreq,
-      algo4_Overheated,
-      algo5_CycleOutlier,
-      algo6_Trend,
-      algo7_SameEnd,
-      algo8_Section,
-      algo9_LastDraw,
-      algo10_TopScores,
-    };
-  }, [latestRound, getLottoNumbersByRound, allNumbers]);
+    }, 60);
+  };
 
   const handleApplySingleAlgorithm = (numbersList, label) => {
     if (!numbersList || numbersList.length === 0) {
@@ -1089,10 +1215,10 @@ export default function App() {
           let status = '정상 흐름';
           let color = '#059669';
           if (z >= 1.5) {
-            status = '🔴 출현 임박';
+            status = '🔴 평균보다 오래 쉼';
             color = '#dc2626';
           } else if (z < -0.5) {
-            status = '🔵 냉각 필요';
+            status = '🔵 평균보다 자주 나옴';
             color = '#2563eb';
           }
 
@@ -1260,6 +1386,17 @@ export default function App() {
       internal15Pairs.sort((a, b) => b.count - a.count);
       const lowPairCount = internal15Pairs.filter((p) => p.count < 10).length;
 
+      // [신규] 인기 패턴 검사 (당첨번호 분석은 자기 자신이 과거 당첨이므로 과거 조합 비교 제외)
+      const pastComboSet =
+        sourceType === 'WINNING'
+          ? null
+          : new Set(
+              Object.values(lottoCache)
+                .filter((d) => d && !d.isPending && Array.isArray(d.numbers) && d.numbers.length === 6)
+                .map((d) => [...d.numbers].sort((a, b) => a - b).join('-'))
+            );
+      const popularPatternReason = getPopularPatternReason(nums, pastComboSet);
+
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
       const numbersCompareSlot1 =
@@ -1332,6 +1469,7 @@ export default function App() {
         distinctEndsCount,
         internal15Pairs,
         lowPairCount,
+        popularPatternReason,
         rowCounts,
         colCounts,
         deadRowCount: deadRows,
@@ -1349,7 +1487,7 @@ export default function App() {
         coldNumbersInSet,
       };
     },
-    [latestRound, getLottoNumbersByRound, globalPairsRankingMap, calculateCycleZScores]
+    [latestRound, getLottoNumbersByRound, globalPairsRankingMap, calculateCycleZScores, lottoCache]
   );
 
   const getFlatSavedGames = useCallback(() => {
@@ -2529,7 +2667,7 @@ export default function App() {
                   {activeGenOption === 'OPT_WHEELING'
                     ? '10수 압축 휠링 커버링 (3~4등 보장 설계)'
                     : activeGenOption === 'OPT_STRICT'
-                    ? '12대 필터 + 끝수다양성 + 직전이웃수 결합'
+                    ? '12대 필터 + 끝수다양성 + 직전이웃수 + 인기패턴 회피'
                     : '제외수 반영 무작위 6개 추출'}
                 </Text>
                 {fixedNumbers.length > 0 && (
@@ -2582,7 +2720,7 @@ export default function App() {
                 activeOpacity={0.85}
               >
                 <Text style={styles.bottomOptionBtnTitle}>📊 정밀 필터링</Text>
-                <Text style={styles.bottomOptionBtnSub}>(끝수다양성·이웃수)</Text>
+                <Text style={styles.bottomOptionBtnSub}>(인기패턴 회피 포함)</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -2884,11 +3022,30 @@ export default function App() {
                   onPress={applySmart10AlgorithmSet}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.smartAuto12BtnTitle}>⚡ 10대 알고리즘 정밀 제외수 12개 자동 도출</Text>
+                  <Text style={styles.smartAuto12BtnTitle}>⚡ 종합 점수 상위 제외수 자동 설정 (최대 12개)</Text>
                   <Text style={styles.smartAuto12BtnSub}>
-                    (장·단기 미출 + 과열 + 출현주기 + 추세 + 끝수·구간 종합 가중 평가)
+                    (미출현 + 과열 + 이웃수 + 추세 + 끝수·구간 점수 합산)
                   </Text>
                 </TouchableOpacity>
+
+                <View style={styles.honestNoteBox}>
+                  <Text style={styles.honestNoteText}>
+                    ※ 로또는 매주 새로 추첨해서 어떤 제외수도 당첨 확률을 바꾸지는 못해요. 아래 버튼으로 각 알고리즘의 과거 성적을 직접 확인해 보세요.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.backtestOpenBtn}
+                    onPress={() => {
+                      setIsExcludeModalVisible(false);
+                      setTimeout(() => {
+                        setIsBacktestModalVisible(true);
+                        if (!backtestData) runBacktest(backtestCount);
+                      }, 350);
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.backtestOpenBtnText}>🧪 알고리즘 효과 검증 (과거 회차로 시험)</Text>
+                  </TouchableOpacity>
+                </View>
 
                 <Text style={styles.algoSectionHeaderTitle}>
                   📋 10가지 제외 알고리즘 개별 실행 (터치 시 즉시 제외수 등록):
@@ -2933,11 +3090,11 @@ export default function App() {
 
                   <TouchableOpacity
                     style={styles.algoGridBtn}
-                    onPress={() => handleApplySingleAlgorithm(analytics10.algo5_CycleOutlier, '⑤ 출현 주기 이탈')}
+                    onPress={() => handleApplySingleAlgorithm(analytics10.algo5_Neighbor, '⑤ 직전 이웃수 (직전 번호 ±1)')}
                     activeOpacity={0.75}
                   >
-                    <Text style={styles.algoGridBtnTitle}>⑤ 출현 주기 이탈</Text>
-                    <Text style={styles.algoGridBtnSub}>평균 주기 급단기 ({analytics10.algo5_CycleOutlier.length}개)</Text>
+                    <Text style={styles.algoGridBtnTitle}>⑤ 직전 이웃수</Text>
+                    <Text style={styles.algoGridBtnSub}>직전 번호 ±1 ({analytics10.algo5_Neighbor.length}개)</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -2978,11 +3135,11 @@ export default function App() {
 
                   <TouchableOpacity
                     style={[styles.algoGridBtn, { borderColor: '#b91c1c', backgroundColor: '#fff1f2' }]}
-                    onPress={() => handleApplySingleAlgorithm(analytics10.algo10_TopScores, '⑩ 종합 페널티 상위')}
+                    onPress={() => handleApplySingleAlgorithm(analytics10.algo10_TopScores, '⑩ 종합 점수 상위')}
                     activeOpacity={0.75}
                   >
-                    <Text style={[styles.algoGridBtnTitle, { color: '#9f1239' }]}>⑩ 종합 페널티 상위</Text>
-                    <Text style={[styles.algoGridBtnSub, { color: '#be123c' }]}>가중치 위험 상위군</Text>
+                    <Text style={[styles.algoGridBtnTitle, { color: '#9f1239' }]}>⑩ 종합 점수 상위</Text>
+                    <Text style={[styles.algoGridBtnSub, { color: '#be123c' }]}>점수 상위 최대 12개 ({analytics10.algo10_TopScores.length}개)</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -4011,6 +4168,23 @@ export default function App() {
                     </View>
 
                     <View style={styles.detailMetricCardFull}>
+                      <Text style={styles.detailMetricHeader}>인기 패턴 검사 (1등 당첨금 나눠 가질 위험)</Text>
+                      <Text
+                        style={[
+                          styles.detailMetricValue,
+                          { color: analysisTargetData.popularPatternReason ? '#dc2626' : '#059669' },
+                        ]}
+                      >
+                        {analysisTargetData.popularPatternReason
+                          ? `⚠️ ${analysisTargetData.popularPatternReason}`
+                          : '✅ 흔한 인기 패턴 아님'}
+                      </Text>
+                      <Text style={styles.detailMetricSub}>
+                        당첨 확률은 같지만, 많은 사람이 고르는 조합은 당첨금을 나눠 받을 가능성이 커요.
+                      </Text>
+                    </View>
+
+                    <View style={styles.detailMetricCardFull}>
                       <Text style={styles.detailMetricHeader}>연속번호(연번) 구성</Text>
                       <Text style={[styles.detailMetricValue, { color: analysisTargetData.consecutivePairsList.length > 0 ? '#2563eb' : '#64748b' }]}>
                         {analysisTargetData.consecutivePairsList.length > 0
@@ -4125,12 +4299,12 @@ export default function App() {
                       ? (analysisTargetData.historyEndRound >= 1
                           ? `제${analysisTargetData.sourceIndex}회 제외 · ~제${analysisTargetData.historyEndRound}회 기준`
                           : '제1회 첫 추첨')
-                      : '출현 임박 지수'})
+                      : '번호별 출현 간격'})
                   </Text>
                   <Text style={styles.pairTableSubGuide}>
                     * {analysisTargetData.sourceType === 'WINNING'
-                      ? `제${analysisTargetData.sourceIndex}회 추첨 직전 시점의 고유 평균 주기(μ)·표준편차(σ) 정규화 지수 (Z ≥ 1.5: 임계점 도달)`
-                      : '고유 평균 주기(μ)와 표준편차(σ) 기반 정규화 지수 (Z ≥ 1.5: 임계점 도달)'}
+                      ? `제${analysisTargetData.sourceIndex}회 추첨 직전 시점의 평균 출현 간격(μ)·표준편차(σ) 대비 현재 쉬는 기간. 과거 기록일 뿐 다음 출현을 예측하지는 않아요.`
+                      : '평균 출현 간격(μ)·표준편차(σ) 대비 현재 쉬는 기간. 과거 기록일 뿐 다음 출현을 예측하지는 않아요.'}
                   </Text>
 
                   <View style={styles.tableHeader}>
@@ -4223,6 +4397,130 @@ export default function App() {
             <TouchableOpacity style={styles.confirmBtn} onPress={() => setIsAnalysisModalVisible(false)}>
               <Text style={styles.btnTextWhite}>확인</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* [신규 모달] 제외수 알고리즘 효과 검증 */}
+      <Modal
+        visible={isBacktestModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsBacktestModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.bottomModalContainer, { maxHeight: '92%' }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text style={styles.modalTitle}>🧪 제외수 알고리즘 효과 검증</Text>
+                <Text style={styles.modalSubtitle}>
+                  {backtestData && backtestData.tested > 0
+                    ? `제${backtestData.firstRound}회 ~ 제${backtestData.lastRound}회 (${backtestData.tested}회차) 시험 결과`
+                    : '과거 회차마다 그 직전까지의 데이터로 제외수를 뽑아 실제 결과와 비교'}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setIsBacktestModalVisible(false)} style={styles.closeBtn}>
+                <Text style={styles.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.backtestCountRow}>
+              <Text style={styles.backtestCountLabel}>시험 기간:</Text>
+              {[50, 100, 300, 1000].map((cnt) => (
+                <TouchableOpacity
+                  key={`bt-${cnt}`}
+                  style={[styles.backtestCountBtn, backtestCount === cnt && styles.backtestCountBtnActive]}
+                  onPress={() => runBacktest(cnt)}
+                  disabled={isBacktesting}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.backtestCountBtnText, backtestCount === cnt && { color: '#ffffff' }]}>
+                    최근 {cnt}회
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.backtestExplainBox}>
+              <Text style={styles.backtestExplainText}>
+                • <Text style={{ fontWeight: '900' }}>걸린 개수</Text>: 실제 당첨번호 6개 중 제외수에 들어가 버린 평균 개수 (적을수록 좋음){'\n'}
+                • <Text style={{ fontWeight: '900' }}>무작위 기대</Text>: 같은 개수를 아무렇게나 골랐을 때의 평균{'\n'}
+                • <Text style={{ fontWeight: '900' }}>6개 모두 피함</Text>: 제외수가 당첨번호를 하나도 건드리지 않은 회차 비율 (높을수록 좋음)
+              </Text>
+            </View>
+
+            {isBacktesting ? (
+              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                <ActivityIndicator size="large" color="#2563eb" />
+                <Text style={[styles.modalSubtitle, { marginTop: 10 }]}>과거 회차를 하나씩 계산하는 중...</Text>
+              </View>
+            ) : backtestData && backtestData.tested > 0 ? (
+              <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                {EXCLUSION_ALGOS.map(({ key, label }) => {
+                  const R = backtestData.results[key];
+                  const avgExcluded = R.rounds ? R.totalExcluded / R.rounds : 0;
+                  const avgActual = R.rounds ? R.actualHits / R.rounds : 0;
+                  const avgExpected = R.rounds ? R.expectedHits / R.rounds : 0;
+                  const cleanActualPct = R.rounds ? (R.cleanActual / R.rounds) * 100 : 0;
+                  const cleanExpectedPct = R.rounds ? (R.cleanExpected / R.rounds) * 100 : 0;
+                  const ratio = avgExpected > 0 ? avgActual / avgExpected : null;
+
+                  let verdict = '해당 번호가 거의 없음';
+                  let verdictColor = '#64748b';
+                  if (ratio !== null && avgExcluded >= 0.5) {
+                    if (ratio < 0.85) {
+                      verdict = '✅ 무작위보다 덜 걸림';
+                      verdictColor = '#059669';
+                    } else if (ratio > 1.15) {
+                      verdict = '❌ 무작위보다 더 걸림';
+                      verdictColor = '#dc2626';
+                    } else {
+                      verdict = '➖ 무작위와 비슷';
+                      verdictColor = '#475569';
+                    }
+                  }
+
+                  return (
+                    <View key={`bt-row-${key}`} style={styles.backtestRow}>
+                      <View style={styles.backtestRowTop}>
+                        <Text style={styles.backtestRowTitle}>{label}</Text>
+                        <Text style={[styles.backtestVerdict, { color: verdictColor }]}>{verdict}</Text>
+                      </View>
+                      <Text style={styles.backtestRowDetail}>
+                        평균 제외 {avgExcluded.toFixed(1)}개 · 걸린 개수 {avgActual.toFixed(2)}개 (무작위 기대 {avgExpected.toFixed(2)}개)
+                      </Text>
+                      <Text style={styles.backtestRowDetail}>
+                        6개 모두 피함 {cleanActualPct.toFixed(1)}% (무작위 기대 {cleanExpectedPct.toFixed(1)}%)
+                      </Text>
+                    </View>
+                  );
+                })}
+
+                <Text style={styles.backtestFootnote}>
+                  ※ 시험 기간이 짧으면 우연만으로도 ±15% 정도 차이가 날 수 있어요. 기간을 바꿔도 같은 결과가 꾸준히 나와야 의미가 있어요.
+                  {'\n'}※ 로또 추첨은 매번 독립적이라, 기간을 길게 할수록 대부분 '무작위와 비슷'으로 모이는 것이 정상이에요.
+                </Text>
+              </ScrollView>
+            ) : (
+              <Text style={[styles.modalSubtitle, { paddingVertical: 30, textAlign: 'center' }]}>
+                {backtestData ? '검증할 과거 데이터가 부족합니다.' : '위에서 시험 기간을 눌러 검증을 시작하세요.'}
+              </Text>
+            )}
+
+            <View style={styles.modalFooterRow}>
+              <TouchableOpacity
+                style={[styles.confirmBtn, { flex: 1, backgroundColor: '#b91c1c' }]}
+                onPress={() => {
+                  setIsBacktestModalVisible(false);
+                  setTimeout(() => setIsExcludeModalVisible(true), 350);
+                }}
+              >
+                <Text style={styles.btnTextWhite}>제외수 설정으로</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.confirmBtn, { flex: 1 }]} onPress={() => setIsBacktestModalVisible(false)}>
+                <Text style={styles.btnTextWhite}>닫기</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -6130,6 +6428,50 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0f172a',
   },
+  // [신규] 효과 검증
+  honestNoteBox: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 10,
+  },
+  honestNoteText: {
+    fontSize: 10.5,
+    color: '#92400e',
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  backtestOpenBtn: {
+    marginTop: 6,
+    backgroundColor: '#1d4ed8',
+    borderRadius: 7,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  backtestOpenBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '900' },
+  backtestCountRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginVertical: 8 },
+  backtestCountLabel: { fontSize: 11, fontWeight: '800', color: '#475569' },
+  backtestCountBtn: {
+    flex: 1,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+  },
+  backtestCountBtnActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  backtestCountBtnText: { fontSize: 10.5, fontWeight: '800', color: '#2563eb' },
+  backtestExplainBox: { backgroundColor: '#f8fafc', borderRadius: 8, padding: 8, marginBottom: 8 },
+  backtestExplainText: { fontSize: 10.5, color: '#475569', lineHeight: 16 },
+  backtestRow: { paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e2e8f0' },
+  backtestRowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 },
+  backtestRowTitle: { fontSize: 13, fontWeight: '900', color: '#0f172a' },
+  backtestVerdict: { fontSize: 11.5, fontWeight: '900' },
+  backtestRowDetail: { fontSize: 11, color: '#475569', marginTop: 1 },
+  backtestFootnote: { fontSize: 10, color: '#64748b', marginTop: 10, marginBottom: 6, lineHeight: 15 },
   // [신규] 구매 회차 배지
   targetRoundBadge: {
     alignSelf: 'flex-start',
@@ -6149,7 +6491,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#047857',
   },
-  // [신규] 백업·복원
+  // [신규] 백업·복원 스타일
   backupBtn: {
     flex: 1,
     backgroundColor: '#0f766e',
