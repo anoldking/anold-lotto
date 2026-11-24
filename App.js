@@ -164,9 +164,15 @@ const isEssentialValid = (numbers) => {
 // [신규] 인기 패턴 검사: 많은 사람이 고르는 조합은 1등 당첨금을 여러 명이 나눠 가질 위험이 큼
 // (당첨 확률은 같지만, 당첨됐을 때 받는 돈을 지키는 통계적으로 근거 있는 방법)
 // -----------------------------------------------------------------
-const getPopularPatternReason = (numbers, pastComboSet = null) => {
+const getPopularPatternReason = (numbers, pastComboSet = null, pastFiveSet = null) => {
   const sorted = [...numbers].sort((a, b) => a - b);
   if (sorted.length !== 6) return null;
+  // [신규] 4개 이상 이어진 번호 (2~3개 연속은 실제 당첨번호에도 흔해서 허용)
+  let run = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    run = sorted[i] - sorted[i - 1] === 1 ? run + 1 : 1;
+    if (run >= 4) return '4개 이상 연속번호';
+  }
   if (sorted[5] <= 31) return '생일·기념일 숫자(1~31)만 사용';
   const step = sorted[1] - sorted[0];
   if (sorted.every((n, i) => i === 0 || n - sorted[i - 1] === step)) return `일정 간격(${step}씩) 수열`;
@@ -177,8 +183,41 @@ const getPopularPatternReason = (numbers, pastComboSet = null) => {
   const diagA = sorted.filter((n) => (n - 1) % 8 === 0).length; // 1, 9, 17, 25, 33, 41 (↘ 대각선)
   const diagB = sorted.filter((n) => n >= 7 && n <= 43 && (n - 7) % 6 === 0).length; // 7, 13, 19, 25, 31, 37, 43 (↙ 대각선)
   if (diagA >= 4 || diagB >= 4) return '용지 대각선에 4개 이상';
-  if (pastComboSet && pastComboSet.has(sorted.join('-'))) return '과거 당첨번호와 똑같은 조합';
+  if (pastComboSet && pastComboSet.has(sorted.join('-'))) return '과거 1등 번호와 똑같은 조합';
+  // [신규] 과거 당첨번호와 5개가 같은 조합 (과거 2·3등에 해당하는 조합)
+  if (pastFiveSet) {
+    for (let skip = 0; skip < 6; skip++) {
+      const key = sorted.filter((_, i) => i !== skip).join('-');
+      if (pastFiveSet.has(key)) return '과거 당첨번호와 5개 일치 (과거 2·3등 조합)';
+    }
+  }
   return null;
+};
+
+// [신규] 과거 당첨 조합 목록 만들기 (maxRound 회차까지)
+const buildPastComboSets = (cache, maxRound = Infinity) => {
+  const pastComboSet = new Set();
+  const pastFiveSet = new Set();
+  Object.values(cache || {}).forEach((d) => {
+    if (!d || d.isPending || !Array.isArray(d.numbers) || d.numbers.length !== 6) return;
+    if (Number(d.drwNo) > maxRound) return;
+    const sorted = [...d.numbers].sort((a, b) => a - b);
+    pastComboSet.add(sorted.join('-'));
+    for (let skip = 0; skip < 6; skip++) {
+      pastFiveSet.add(sorted.filter((_, i) => i !== skip).join('-'));
+    }
+  });
+  return { pastComboSet, pastFiveSet };
+};
+
+// [신규] 추천 필터: 인기 패턴만 피하고 나머지는 완전 무작위
+const generateRecommendedSet = (excluded, fixed, pastSets) => {
+  for (let attempt = 0; attempt < 5000; attempt++) {
+    const candidate = generateBasicLottoSet(excluded, fixed);
+    if (candidate.length < 6) return [];
+    if (!getPopularPatternReason(candidate, pastSets?.pastComboSet, pastSets?.pastFiveSet)) return candidate;
+  }
+  return generateBasicLottoSet(excluded, fixed); // 고정수 때문에 피할 수 없는 경우
 };
 
 // [고급 필터 1] 끝수 다양성(4~6개) 및 이웃수(1~3개) 포함 12대 정밀 검증기
@@ -260,7 +299,7 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   if (deadCols < 2 || deadCols > 4) return false;
 
   // [신규] 인기 패턴(당첨금 나눠 가질 위험이 큰 조합) 회피
-  if (getPopularPatternReason(sorted, dynamicContext?.pastComboSet)) return false;
+  if (getPopularPatternReason(sorted, dynamicContext?.pastComboSet, dynamicContext?.pastFiveSet)) return false;
 
   if (dynamicContext) {
     const { round1Numbers, doubleCarryOver, neighborSet } = dynamicContext;
@@ -655,7 +694,7 @@ export default function App() {
 
   const [games, setGames] = useState([]);
   const [generationTitle, setGenerationTitle] = useState('🎉 번호 추첨 완료');
-  const [activeGenOption, setActiveGenOption] = useState('OPT_STRICT');
+  const [activeGenOption, setActiveGenOption] = useState('OPT_RECOMMENDED'); // [변경] 기본값 = 추천 필터
 
   const [excludedNumbers, setExcludedNumbers] = useState([]);
   const [fixedNumbers, setFixedNumbers] = useState([]); // [신규] 고정수(반드시 포함할 번호)
@@ -801,6 +840,9 @@ export default function App() {
     }
   }, [isWinningModalVisible, winningTopRound, prefetchRounds]);
 
+  // 과거 당첨 조합 목록 (데이터가 바뀔 때만 다시 계산)
+  const pastSets = useMemo(() => buildPastComboSets(lottoCache), [lottoCache]);
+
   const getDynamicContextData = useCallback(() => {
     const round1 = getLottoNumbersByRound(latestRound);
     const round2 = latestRound > 1 ? getLottoNumbersByRound(latestRound - 1) : null;
@@ -816,20 +858,14 @@ export default function App() {
       if (num < 45) neighborSet.add(num + 1);
     });
 
-    // 과거 당첨 조합 목록 (똑같은 조합을 다시 고르는 사람이 많음)
-    const pastComboSet = new Set(
-      Object.values(lottoCache)
-        .filter((d) => d && !d.isPending && Array.isArray(d.numbers) && d.numbers.length === 6)
-        .map((d) => [...d.numbers].sort((a, b) => a - b).join('-'))
-    );
-
     return {
       round1Numbers: list1,
       doubleCarryOver,
       neighborSet,
-      pastComboSet,
+      pastComboSet: pastSets.pastComboSet,
+      pastFiveSet: pastSets.pastFiveSet,
     };
-  }, [latestRound, getLottoNumbersByRound, lottoCache]);
+  }, [latestRound, getLottoNumbersByRound, pastSets]);
 
   const generateStrictFilteredSet = useCallback(
     (excluded = [], fixed = []) => {
@@ -852,7 +888,10 @@ export default function App() {
         const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
 
-        if (isEssentialValid(candidate) && !getPopularPatternReason(candidate, dynamicContext.pastComboSet)) {
+        if (
+          isEssentialValid(candidate) &&
+          !getPopularPatternReason(candidate, dynamicContext.pastComboSet, dynamicContext.pastFiveSet)
+        ) {
           return candidate;
         }
       }
@@ -863,7 +902,11 @@ export default function App() {
         const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
         const sum = candidate.reduce((acc, cur) => acc + cur, 0);
-        if (sum >= 100 && sum <= 180 && !getPopularPatternReason(candidate, dynamicContext.pastComboSet)) {
+        if (
+          sum >= 100 &&
+          sum <= 180 &&
+          !getPopularPatternReason(candidate, dynamicContext.pastComboSet, dynamicContext.pastFiveSet)
+        ) {
           return candidate;
         }
       }
@@ -1156,6 +1199,24 @@ export default function App() {
     );
   };
 
+  // [신규] ⑪ 인기 번호 줄이기: 많은 사람이 고르는 번호를 조금 빼서 32~45가 더 많이 들어가게 함
+  //        (확률은 같고, 당첨 시 나눠 가질 위험을 줄이는 목적. 매번 무작위로 골라 모두 같은 번호가 되지 않게 함)
+  const applyPopularNumberReduction = () => {
+    const monthPool = Array.from({ length: 12 }, (_, i) => i + 1).filter(
+      (n) => n !== 7 && !fixedNumbers.includes(n)
+    );
+    const picked = [];
+    while (picked.length < 4 && monthPool.length > 0) {
+      picked.push(monthPool.splice(Math.floor(Math.random() * monthPool.length), 1)[0]);
+    }
+    const next = [...(fixedNumbers.includes(7) ? [] : [7]), ...picked].sort((a, b) => a - b);
+    setExcludedNumbers(next);
+    Alert.alert(
+      '인기 번호 줄이기 완료',
+      `기존 제외수를 지우고 ${next.length}개로 새로 설정했습니다.\n\n제외 번호: [${next.join(', ')}]\n\n※ 당첨 확률은 같고, 1등이 됐을 때 당첨금을 나눠 가질 위험을 줄이는 목적이에요.`
+    );
+  };
+
   const applySmart10AlgorithmSet = () => {
     const { algo10_TopScores } = get10ExclusionAnalytics();
     if (algo10_TopScores.length === 0) {
@@ -1386,16 +1447,10 @@ export default function App() {
       internal15Pairs.sort((a, b) => b.count - a.count);
       const lowPairCount = internal15Pairs.filter((p) => p.count < 10).length;
 
-      // [신규] 인기 패턴 검사 (당첨번호 분석은 자기 자신이 과거 당첨이므로 과거 조합 비교 제외)
-      const pastComboSet =
-        sourceType === 'WINNING'
-          ? null
-          : new Set(
-              Object.values(lottoCache)
-                .filter((d) => d && !d.isPending && Array.isArray(d.numbers) && d.numbers.length === 6)
-                .map((d) => [...d.numbers].sort((a, b) => a - b).join('-'))
-            );
-      const popularPatternReason = getPopularPatternReason(nums, pastComboSet);
+      // [신규] 인기 패턴 검사
+      //        당첨번호 분석은 그 회차 이전의 당첨번호와만 비교
+      const sets = sourceType === 'WINNING' ? buildPastComboSets(lottoCache, baseRound - 1) : pastSets;
+      const popularPatternReason = getPopularPatternReason(nums, sets.pastComboSet, sets.pastFiveSet);
 
       const { deadRows, deadCols, rowCounts, colCounts } = getPaperDeadPattern(nums);
 
@@ -1487,7 +1542,7 @@ export default function App() {
         coldNumbersInSet,
       };
     },
-    [latestRound, getLottoNumbersByRound, globalPairsRankingMap, calculateCycleZScores, lottoCache]
+    [latestRound, getLottoNumbersByRound, globalPairsRankingMap, calculateCycleZScores, lottoCache, pastSets]
   );
 
   const getFlatSavedGames = useCallback(() => {
@@ -2329,6 +2384,9 @@ export default function App() {
       } else if (optionType === 'OPT_STRICT') {
         newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers, fixedNumbers));
         title = '📊 12대 정밀 필터링 5세트 생성';
+      } else if (optionType === 'OPT_RECOMMENDED') {
+        newGames = Array.from({ length: 5 }, () => generateRecommendedSet(excludedNumbers, fixedNumbers, pastSets));
+        title = '✅ 추천 필터 5세트 생성';
       } else if (optionType === 'OPT_WHEELING') {
         newGames = generateWheelingSystemSets(excludedNumbers, fixedNumbers);
         title = '🎯 10수 압축 휠링 5세트 생성';
@@ -2338,7 +2396,7 @@ export default function App() {
       setGenerationTitle(title);
       setIsGeneratedModalVisible(true);
     },
-    [excludedNumbers, fixedNumbers, generateStrictFilteredSet, generateWheelingSystemSets]
+    [excludedNumbers, fixedNumbers, generateStrictFilteredSet, generateWheelingSystemSets, pastSets]
   );
 
   const handleGenerateOpposite = () => {
@@ -2664,7 +2722,9 @@ export default function App() {
               <View>
                 <Text style={styles.modalTitle}>{generationTitle}</Text>
                 <Text style={styles.modalSubtitle}>
-                  {activeGenOption === 'OPT_WHEELING'
+                  {activeGenOption === 'OPT_RECOMMENDED'
+                    ? '무작위 + 인기 패턴만 회피 (당첨금 나눠 가질 위험↓)'
+                    : activeGenOption === 'OPT_WHEELING'
                     ? '10수 압축 휠링 커버링 (3~4등 보장 설계)'
                     : activeGenOption === 'OPT_STRICT'
                     ? '12대 필터 + 끝수다양성 + 직전이웃수 + 인기패턴 회피'
@@ -2712,6 +2772,17 @@ export default function App() {
                 </View>
               ))}
             </ScrollView>
+
+            <TouchableOpacity
+              style={styles.recommendedOptionBtn}
+              onPress={() => handleGenerateWithOptions('OPT_RECOMMENDED')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.recommendedOptionBtnTitle}>✅ 추천 필터 (인기 패턴만 회피)</Text>
+              <Text style={styles.recommendedOptionBtnSub}>
+                생일숫자만·일정간격·4연속·용지 줄/대각선·과거 1·2·3등 조합 제외
+              </Text>
+            </TouchableOpacity>
 
             <View style={styles.threeOptionBtnRow}>
               <TouchableOpacity
@@ -3010,7 +3081,7 @@ export default function App() {
 
             <View style={styles.excludeCountBar}>
               <Text style={styles.excludeCountText}>
-                제외수 <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (권장 10~14) · 고정수{' '}
+                제외수 <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (권장 0~6) · 고정수{' '}
                 <Text style={[styles.excludeCountHighlight, { color: '#059669' }]}>{fixedNumbers.length}개</Text> (최대 {MAX_FIXED_NUMBERS})
               </Text>
             </View>
@@ -3140,6 +3211,17 @@ export default function App() {
                   >
                     <Text style={[styles.algoGridBtnTitle, { color: '#9f1239' }]}>⑩ 종합 점수 상위</Text>
                     <Text style={[styles.algoGridBtnSub, { color: '#be123c' }]}>점수 상위 최대 12개 ({analytics10.algo10_TopScores.length}개)</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.algoGridBtn, { width: '100%', borderColor: '#059669', backgroundColor: '#ecfdf5' }]}
+                    onPress={applyPopularNumberReduction}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={[styles.algoGridBtnTitle, { color: '#047857' }]}>⑪ 인기 번호 줄이기 (추천)</Text>
+                    <Text style={[styles.algoGridBtnSub, { color: '#059669' }]}>
+                      7 + 생일에 많이 쓰는 1~12 중 무작위 4개 → 제외수 5개로 설정
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -6428,6 +6510,18 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0f172a',
   },
+  // [신규] 추천 필터 버튼
+  recommendedOptionBtn: {
+    backgroundColor: '#047857',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    marginBottom: 6,
+    elevation: 2,
+  },
+  recommendedOptionBtnTitle: { color: '#ffffff', fontSize: 13.5, fontWeight: '900' },
+  recommendedOptionBtnSub: { color: '#d1fae5', fontSize: 9.5, fontWeight: '600', marginTop: 2, textAlign: 'center' },
   // [신규] 효과 검증
   honestNoteBox: {
     backgroundColor: '#fffbeb',
