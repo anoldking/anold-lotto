@@ -352,24 +352,34 @@ const normalizeLegacyItem = (data) => {
 };
 
 // 동행복권 새 주소 조회 (param: 회차 숫자 또는 'all')
-const fetchOfficialNewList = async (param) => {
+const fetchOfficialNewList = async (param, log = null) => {
   try {
     const res = await fetchWithTimeout(
       `${OFFICIAL_API_NEW}?srchLtEpsd=${param}&_=${Date.now()}`,
       { headers: OFFICIAL_HEADERS },
       param === 'all' ? 25000 : 8000
     );
-    if (!res.ok) return [];
+    if (!res.ok) {
+      log && log.push(`동행복권: 접속 실패 (코드 ${res.status})`);
+      return [];
+    }
     const json = await safeJson(res);
+    if (!json) {
+      log && log.push('동행복권: 데이터 대신 다른 페이지가 옴 (접속 차단 가능성)');
+      return [];
+    }
     const list = json?.data?.list || json?.list || [];
-    return Array.isArray(list) ? list.map(normalizeOfficialNewItem).filter(Boolean) : [];
+    const parsed = Array.isArray(list) ? list.map(normalizeOfficialNewItem).filter(Boolean) : [];
+    if (parsed.length === 0) log && log.push('동행복권: 아직 발표 전 (빈 결과)');
+    return parsed;
   } catch (e) {
+    log && log.push(`동행복권: 연결 안 됨 (${e?.name === 'AbortError' ? '시간 초과' : e?.message || '오류'})`);
     console.log('[동행복권 새 주소 조회 실패]', param, e?.message);
     return [];
   }
 };
 
-const fetchLottoRoundWithFallback = async (drwNo) => {
+const fetchLottoRoundWithFallback = async (drwNo, log = null) => {
   const target = Number(drwNo);
 
   // 1차: GitHub CDN의 latest.json (요청한 회차와 정확히 같을 때만 사용)
@@ -378,13 +388,17 @@ const fetchLottoRoundWithFallback = async (drwNo) => {
     if (resPrimary.ok) {
       const parsed = normalizeLegacyItem(await safeJson(resPrimary));
       if (parsed && parsed.drwNo === target) return parsed;
+      log && log.push(`GitHub: 파일은 있지만 ${parsed ? `제${parsed.drwNo}회까지만 있음` : '형식이 다름'}`);
+    } else {
+      log && log.push(`GitHub: 파일 없음 (코드 ${resPrimary.status})`);
     }
   } catch (e) {
+    log && log.push('GitHub: 연결 안 됨');
     console.log('[1차 CDN 조회 실패]', e?.message);
   }
 
   // 2차: 동행복권 새 주소
-  const list = await fetchOfficialNewList(target);
+  const list = await fetchOfficialNewList(target, log);
   const found = list.find((item) => item.drwNo === target);
   if (found) return found;
 
@@ -1628,10 +1642,9 @@ export default function App() {
         .map(Number)
         .filter((r) => base[r] && !base[r].isPending);
       const storedMax = knownRounds.length > 0 ? Math.max(...knownRounds) : 0;
-      const targetRound = calculateCurrentLatestRound();
-
-      if (storedMax >= targetRound) return { added: [], upToDate: true };
-
+      // [수정] 날짜 계산값만 믿지 않고, 저장된 마지막 회차 + 1은 항상 직접 확인
+      const targetRound = Math.max(calculateCurrentLatestRound(), storedMax + 1);
+      const log = [];
       const newEntries = {};
 
       // 여러 회차가 밀려 있으면 전체 목록으로 한 번에 채우기
@@ -1643,15 +1656,22 @@ export default function App() {
       }
 
       // 남은 회차는 한 회차씩 순서대로 확인 (아직 발표 전이면 거기서 멈춤)
-      for (let r = storedMax + 1; r <= targetRound; r++) {
-        if (newEntries[r]) continue;
-        const fetched = await fetchLottoRoundWithFallback(r);
-        if (!fetched) break;
-        newEntries[r] = { ...fetched, isPending: false };
+      let r = storedMax + 1;
+      while (r <= targetRound + 1) {
+        if (!newEntries[r]) {
+          const roundLog = [];
+          const fetched = await fetchLottoRoundWithFallback(r, roundLog);
+          if (!fetched) {
+            log.push(...roundLog.map((line) => `제${r}회 · ${line}`));
+            break;
+          }
+          newEntries[r] = { ...fetched, isPending: false };
+        }
+        r++;
       }
 
       const added = Object.keys(newEntries).map(Number).sort((a, b) => a - b);
-      if (added.length === 0) return { added: [] };
+      if (added.length === 0) return { added: [], triedRound: storedMax + 1, log };
 
       const merged = { ...lottoCacheRef.current, ...newEntries };
       const newMax = Math.max(storedMax, ...added);
@@ -1663,7 +1683,7 @@ export default function App() {
       return { added, newMax };
     } catch (e) {
       console.log('[자동 갱신 실패]', e?.message);
-      return { added: [], error: true };
+      return { added: [], error: true, log: [`오류: ${e?.message || '알 수 없음'}`] };
     } finally {
       isSyncingRef.current = false;
     }
@@ -1693,14 +1713,13 @@ export default function App() {
       const result = await runAutoSync();
       if (result.added && result.added.length > 0) {
         Alert.alert('동기화 완료', `제 ${result.newMax}회까지 당첨번호가 반영되었습니다. (새로 받은 회차 ${result.added.length}개)`);
-      } else if (result.upToDate) {
-        Alert.alert('최신 상태', `이미 최신 제 ${latestRound}회까지 반영되어 있습니다.`);
       } else if (result.skipped) {
         Alert.alert('갱신 중', '이미 자동 갱신이 진행 중입니다. 잠시 후 다시 확인해 주세요.');
       } else {
+        const detail = result.log && result.log.length > 0 ? `\n\n[확인 결과]\n${result.log.join('\n')}` : '';
         Alert.alert(
           '갱신 안내',
-          '동행복권 서버에 최신 추첨 결과가 아직 없거나 연결할 수 없습니다. 토요일 추첨 후 잠시 뒤 다시 시도하시거나 [✏️ 수동] 버튼으로 직접 등록해 주세요.'
+          `제 ${result.triedRound || latestRound + 1}회 당첨번호를 받아오지 못했습니다. 아직 발표 전이거나 서버에 연결할 수 없습니다.\n[✏️ 수동] 버튼으로 직접 등록할 수도 있습니다.${detail}`
         );
       }
     } finally {
