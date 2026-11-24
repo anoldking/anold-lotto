@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -14,6 +14,7 @@ import {
   ScrollView,
   Dimensions,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -39,7 +40,17 @@ const REPO_NAME = 'anold-lotto';
 
 const PRIMARY_CDN_LATEST = `https://raw.githubusercontent.com/${GITHUB_USERNAME}/${REPO_NAME}/main/data/latest.json`;
 const PRIMARY_CDN_HISTORY = `https://raw.githubusercontent.com/${GITHUB_USERNAME}/${REPO_NAME}/main/data/history.min.json`;
-const SECONDARY_OFFICIAL_API = 'https://www.dhlottery.co.kr/common.do?method=getLottoNumber';
+// [변경] 동행복권 사이트 개편(2025~26년)으로 예전 주소는 더 이상 데이터를 주지 않음 → 새 주소를 우선 사용
+const OFFICIAL_API_NEW = 'https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do';
+const SECONDARY_OFFICIAL_API = 'https://www.dhlottery.co.kr/common.do?method=getLottoNumber'; // 예전 주소(마지막 예비용)
+const OFFICIAL_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+  Accept: 'application/json, text/javascript, */*; q=0.01',
+  'X-Requested-With': 'XMLHttpRequest',
+  Referer: 'https://www.dhlottery.co.kr/lt645/result',
+};
+const AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000; // 앱이 켜져 있는 동안 10분마다 새 회차 확인
 
 const calculateCurrentLatestRound = () => {
   const firstDrawDate = new Date('2002-12-07T21:15:00+09:00');
@@ -242,6 +253,10 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
   return true;
 };
 
+const GAME_LABELS = ['A', 'B', 'C', 'D', 'E'];
+// 아직 불러오지 못한 회차를 화면에 '?'로 표시하기 위한 자리표시
+const PENDING_BALL_SLOTS = [0, 0, 0, 0, 0, 0];
+
 const parseLottoQrUrl = (url) => {
   try {
     const vIndex = url.indexOf('?v=') !== -1 ? url.indexOf('?v=') + 3 : (url.indexOf('&v=') !== -1 ? url.indexOf('&v=') + 3 : -1);
@@ -277,8 +292,118 @@ const parseLottoQrUrl = (url) => {
   }
 };
 
+// -----------------------------------------------------------------
+// 2. 당첨번호 수신 모듈 (GitHub CDN → 동행복권 새 주소 → 예전 주소 순서)
+// -----------------------------------------------------------------
+const fetchWithTimeout = async (url, options = {}, ms = 8000) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const safeJson = async (response) => {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return null; // 차단 페이지(HTML) 등 JSON이 아닌 응답
+  }
+};
+
+const formatYmd = (value) => {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  if (digits.length !== 8) return null;
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+};
+
+const isValidBall = (n) => Number.isInteger(n) && n >= 1 && n <= 45;
+
+// 동행복권 새 주소 응답 1건 → 앱 내부 형식으로 변환
+const normalizeOfficialNewItem = (item) => {
+  if (!item) return null;
+  const drwNo = Number(item.ltEpsd);
+  const numbers = [item.tm1WnNo, item.tm2WnNo, item.tm3WnNo, item.tm4WnNo, item.tm5WnNo, item.tm6WnNo].map(Number);
+  const bnusNo = Number(item.bnsWnNo);
+  if (!drwNo || !numbers.every(isValidBall) || !isValidBall(bnusNo)) return null;
+  return {
+    drwNo,
+    drwNoDate: formatYmd(item.ltRflYmd) || calculateDrwDate(drwNo),
+    numbers: numbers.sort((a, b) => a - b),
+    bnusNo,
+  };
+};
+
+// 예전 형식(latest.json / 예전 주소) → 앱 내부 형식으로 변환
+const normalizeLegacyItem = (data) => {
+  if (!data || data.returnValue !== 'success') return null;
+  const numbers = [data.drwtNo1, data.drwtNo2, data.drwtNo3, data.drwtNo4, data.drwtNo5, data.drwtNo6].map(Number);
+  const bnusNo = Number(data.bnusNo);
+  if (!numbers.every(isValidBall) || !isValidBall(bnusNo)) return null;
+  return {
+    drwNo: Number(data.drwNo),
+    drwNoDate: data.drwNoDate || calculateDrwDate(Number(data.drwNo)),
+    numbers: numbers.sort((a, b) => a - b),
+    bnusNo,
+  };
+};
+
+// 동행복권 새 주소 조회 (param: 회차 숫자 또는 'all')
+const fetchOfficialNewList = async (param) => {
+  try {
+    const res = await fetchWithTimeout(
+      `${OFFICIAL_API_NEW}?srchLtEpsd=${param}&_=${Date.now()}`,
+      { headers: OFFICIAL_HEADERS },
+      param === 'all' ? 25000 : 8000
+    );
+    if (!res.ok) return [];
+    const json = await safeJson(res);
+    const list = json?.data?.list || json?.list || [];
+    return Array.isArray(list) ? list.map(normalizeOfficialNewItem).filter(Boolean) : [];
+  } catch (e) {
+    console.log('[동행복권 새 주소 조회 실패]', param, e?.message);
+    return [];
+  }
+};
+
+const fetchLottoRoundWithFallback = async (drwNo) => {
+  const target = Number(drwNo);
+
+  // 1차: GitHub CDN의 latest.json (요청한 회차와 정확히 같을 때만 사용)
+  try {
+    const resPrimary = await fetchWithTimeout(`${PRIMARY_CDN_LATEST}?t=${Date.now()}`);
+    if (resPrimary.ok) {
+      const parsed = normalizeLegacyItem(await safeJson(resPrimary));
+      if (parsed && parsed.drwNo === target) return parsed;
+    }
+  } catch (e) {
+    console.log('[1차 CDN 조회 실패]', e?.message);
+  }
+
+  // 2차: 동행복권 새 주소
+  const list = await fetchOfficialNewList(target);
+  const found = list.find((item) => item.drwNo === target);
+  if (found) return found;
+
+  // 3차: 동행복권 예전 주소 (혹시 다시 열릴 경우 대비)
+  try {
+    const res = await fetchWithTimeout(`${SECONDARY_OFFICIAL_API}&drwNo=${target}`, { headers: OFFICIAL_HEADERS });
+    if (res.ok) {
+      const parsed = normalizeLegacyItem(await safeJson(res));
+      if (parsed && parsed.drwNo === target) return parsed;
+    }
+  } catch (e) {
+    console.log('[예전 주소 조회 실패]', target, e?.message);
+  }
+
+  return null;
+};
+
 export default function App() {
-  const gameLabels = ['A', 'B', 'C', 'D', 'E'];
+  const gameLabels = GAME_LABELS;
   const allNumbers = useMemo(() => Array.from({ length: 45 }, (_, i) => i + 1), []);
 
   const [latestRound, setLatestRound] = useState(INITIAL_LATEST_ROUND);
@@ -330,69 +455,6 @@ export default function App() {
   const displayed15Rounds = Array.from({ length: 15 }, (_, i) => winningTopRound - i).filter((r) => r >= 1);
   const bottomRound = displayed15Rounds.length > 0 ? displayed15Rounds[displayed15Rounds.length - 1] : winningTopRound;
 
-  // ================= [1차 / 2차 통합 수신 모듈] =================
-  const fetchLottoRoundWithFallback = async (drwNo) => {
-    const cacheBuster = `?t=${Date.now()}`;
-
-    try {
-      const resPrimary = await fetch(`${PRIMARY_CDN_LATEST}${cacheBuster}`);
-      if (resPrimary.ok) {
-        const data = await resPrimary.json();
-        if (data && data.returnValue === 'success' && data.drwNo >= drwNo) {
-          return {
-            drwNo: data.drwNo,
-            drwNoDate: data.drwNoDate,
-            numbers: [
-              data.drwtNo1,
-              data.drwtNo2,
-              data.drwtNo3,
-              data.drwtNo4,
-              data.drwtNo5,
-              data.drwtNo6,
-            ].sort((a, b) => a - b),
-            bnusNo: data.bnusNo,
-          };
-        }
-      }
-    } catch (e) {
-      console.warn(`[1차 CDN 조회 실패] 2차 동행복권 서버로 시도합니다.`);
-    }
-
-    try {
-      const url = `${SECONDARY_OFFICIAL_API}&drwNo=${drwNo}`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          Accept: 'application/json',
-        },
-      });
-
-      if (!response.ok) return null;
-      const data = await response.json();
-
-      if (data && data.returnValue === 'success') {
-        return {
-          drwNo: data.drwNo,
-          drwNoDate: data.drwNoDate,
-          numbers: [
-            data.drwtNo1,
-            data.drwtNo2,
-            data.drwtNo3,
-            data.drwtNo4,
-            data.drwtNo5,
-            data.drwtNo6,
-          ].sort((a, b) => a - b),
-          bnusNo: data.bnusNo,
-        };
-      }
-      return null;
-    } catch (e) {
-      console.log(`[2차 서버 통신 실패] ${drwNo}회차:`, e.message);
-      return null;
-    }
-  };
-
   const getLottoNumbersByRound = useCallback(
     (drwNo) => {
       const cached = lottoCache[drwNo];
@@ -402,8 +464,8 @@ export default function App() {
       return {
         drwNo,
         drwNoDate: calculateDrwDate(drwNo),
-        numbers: [1, 2, 3, 4, 5, 6],
-        bnusNo: 7,
+        numbers: [], // [버그수정] 가짜 번호(1~6) 대신 빈 값
+        bnusNo: null,
         isPending: true,
       };
     },
@@ -442,7 +504,18 @@ export default function App() {
         console.warn('[1차 히스토리 CDN 로드 실패] 2차 개별 호출로 폴백');
       }
 
-      const stillMissing = roundList.filter((r) => !updated[r] || updated[r].isPending);
+      let stillMissing = roundList.filter((r) => !updated[r] || updated[r].isPending);
+      if (stillMissing.length > 3) {
+        // 빠진 회차가 많으면 동행복권 새 주소에서 전체 회차를 한 번에 받기
+        const allList = await fetchOfficialNewList('all');
+        allList.forEach((item) => {
+          if (!updated[item.drwNo] || updated[item.drwNo].isPending) {
+            updated[item.drwNo] = { ...item, isPending: false };
+            hasChanges = true;
+          }
+        });
+        stillMissing = roundList.filter((r) => !updated[r] || updated[r].isPending);
+      }
       for (const r of stillMissing) {
         const fetched = await fetchLottoRoundWithFallback(r);
         if (fetched) {
@@ -452,11 +525,16 @@ export default function App() {
         await new Promise((res) => setTimeout(res, 60));
       }
 
-      if (hasChanges) {
-        setLottoCache(updated);
-        await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
+      try {
+        if (hasChanges) {
+          setLottoCache(updated);
+          await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
+        }
+      } catch (e) {
+        console.log('캐시 저장 실패:', e);
+      } finally {
+        setIsLoadingWinningRounds(false);
       }
-      setIsLoadingWinningRounds(false);
       return updated;
     },
     [lottoCache]
@@ -1312,6 +1390,11 @@ export default function App() {
       await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updatedCache));
     }
 
+    if (roundData.isPending || !roundData.numbers || roundData.numbers.length < 6) {
+      Alert.alert('알림', `제 ${targetRound}회 당첨번호를 아직 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.`);
+      return;
+    }
+
     const result = calculateNumbersAnalysis(
       roundData.numbers,
       targetRound,
@@ -1527,36 +1610,99 @@ export default function App() {
     );
   };
 
+  // ================= [자동 갱신] 저장된 마지막 회차 이후 새 회차를 모두 받아오기 =================
+  const lottoCacheRef = useRef({});
+  const isSyncingRef = useRef(false);
+
+  useEffect(() => {
+    lottoCacheRef.current = lottoCache;
+  }, [lottoCache]);
+
+  const runAutoSync = useCallback(async () => {
+    if (isSyncingRef.current) return { added: [], skipped: true };
+    isSyncingRef.current = true;
+
+    try {
+      const base = lottoCacheRef.current || {};
+      const knownRounds = Object.keys(base)
+        .map(Number)
+        .filter((r) => base[r] && !base[r].isPending);
+      const storedMax = knownRounds.length > 0 ? Math.max(...knownRounds) : 0;
+      const targetRound = calculateCurrentLatestRound();
+
+      if (storedMax >= targetRound) return { added: [], upToDate: true };
+
+      const newEntries = {};
+
+      // 여러 회차가 밀려 있으면 전체 목록으로 한 번에 채우기
+      if (targetRound - storedMax > 3) {
+        const allList = await fetchOfficialNewList('all');
+        allList.forEach((item) => {
+          if (item.drwNo > storedMax) newEntries[item.drwNo] = { ...item, isPending: false };
+        });
+      }
+
+      // 남은 회차는 한 회차씩 순서대로 확인 (아직 발표 전이면 거기서 멈춤)
+      for (let r = storedMax + 1; r <= targetRound; r++) {
+        if (newEntries[r]) continue;
+        const fetched = await fetchLottoRoundWithFallback(r);
+        if (!fetched) break;
+        newEntries[r] = { ...fetched, isPending: false };
+      }
+
+      const added = Object.keys(newEntries).map(Number).sort((a, b) => a - b);
+      if (added.length === 0) return { added: [] };
+
+      const merged = { ...lottoCacheRef.current, ...newEntries };
+      const newMax = Math.max(storedMax, ...added);
+      lottoCacheRef.current = merged;
+      setLottoCache(merged);
+      setLatestRound(newMax);
+      setWinningTopRound(newMax);
+      await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(merged));
+      return { added, newMax };
+    } catch (e) {
+      console.log('[자동 갱신 실패]', e?.message);
+      return { added: [], error: true };
+    } finally {
+      isSyncingRef.current = false;
+    }
+  }, []);
+
+  // 앱을 다시 열 때(백그라운드 → 화면) 자동 확인
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') runAutoSync();
+    });
+    return () => sub.remove();
+  }, [runAutoSync]);
+
+  // 앱이 켜져 있는 동안 10분마다 자동 확인 (토요일 추첨 직후 대비)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (AppState.currentState === 'active') runAutoSync();
+    }, AUTO_SYNC_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [runAutoSync]);
+
   const handleRefreshLatestRound = async () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
 
     try {
-      let calc = calculateCurrentLatestRound();
-      let fetched = await fetchLottoRoundWithFallback(calc);
-
-      if (!fetched && calc > 1) {
-        fetched = await fetchLottoRoundWithFallback(calc - 1);
-      }
-
-      if (fetched) {
-        const newRound = fetched.drwNo;
-        setLatestRound(newRound);
-        setWinningTopRound(newRound);
-
-        const updated = { ...lottoCache, [newRound]: { ...fetched, isPending: false } };
-        setLottoCache(updated);
-        await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(updated));
-
-        Alert.alert('동기화 완료', `제 ${newRound}회 당첨번호가 성공적으로 반영되었습니다.`);
+      const result = await runAutoSync();
+      if (result.added && result.added.length > 0) {
+        Alert.alert('동기화 완료', `제 ${result.newMax}회까지 당첨번호가 반영되었습니다. (새로 받은 회차 ${result.added.length}개)`);
+      } else if (result.upToDate) {
+        Alert.alert('최신 상태', `이미 최신 제 ${latestRound}회까지 반영되어 있습니다.`);
+      } else if (result.skipped) {
+        Alert.alert('갱신 중', '이미 자동 갱신이 진행 중입니다. 잠시 후 다시 확인해 주세요.');
       } else {
         Alert.alert(
           '갱신 안내',
-          '현재 동행복권 서버에 최신 추첨 결과가 아직 등록되지 않았습니다. [✏️ 수동] 버튼으로 즉시 직접 등록할 수도 있습니다.'
+          '동행복권 서버에 최신 추첨 결과가 아직 없거나 연결할 수 없습니다. 토요일 추첨 후 잠시 뒤 다시 시도하시거나 [✏️ 수동] 버튼으로 직접 등록해 주세요.'
         );
       }
-    } catch (e) {
-      Alert.alert('네트워크 안내', '인터넷 연결 상태를 확인해 주세요.');
     } finally {
       setIsRefreshing(false);
     }
@@ -1569,7 +1715,20 @@ export default function App() {
       try {
         const stored = await AsyncStorage.getItem(CACHE_STORAGE_KEY);
         if (stored) {
-          localCache = JSON.parse(stored);
+          const parsed = JSON.parse(stored);
+          // [버그수정] 이전 버전 버그로 잘못 저장된 회차(키와 회차번호 불일치) 자동 정리
+          Object.keys(parsed || {}).forEach((key) => {
+            const item = parsed[key];
+            if (
+              item &&
+              Number(item.drwNo) === Number(key) &&
+              Array.isArray(item.numbers) &&
+              item.numbers.length === 6 &&
+              !item.isPending
+            ) {
+              localCache[key] = item;
+            }
+          });
         }
       } catch (e) {
         console.log('캐시 로드 실패:', e);
@@ -1615,22 +1774,8 @@ export default function App() {
       setWinningTopRound(currentStoredMax);
       setLottoCache(localCache);
 
-      let calc = calculateCurrentLatestRound();
-      if (calc > currentStoredMax) {
-        let latestFetched = await fetchLottoRoundWithFallback(calc);
-        if (!latestFetched && calc > 1) {
-          calc = calc - 1;
-          latestFetched = await fetchLottoRoundWithFallback(calc);
-        }
-
-        if (latestFetched && latestFetched.drwNo > currentStoredMax) {
-          localCache[latestFetched.drwNo] = { ...latestFetched, isPending: false };
-          setLatestRound(latestFetched.drwNo);
-          setWinningTopRound(latestFetched.drwNo);
-          setLottoCache(localCache);
-          await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(localCache));
-        }
-      }
+      lottoCacheRef.current = localCache;
+      await runAutoSync(); // 앱 시작 시 새 회차 자동 확인
     };
 
     initApp();
@@ -2052,7 +2197,19 @@ export default function App() {
   };
 
   const latestWinningInfo = getLottoNumbersByRound(latestRound);
-  const analytics10 = get10ExclusionAnalytics();
+  // [성능개선] 화면이 다시 그려질 때마다 반복 계산하지 않도록 캐싱
+  const analytics10 = useMemo(() => get10ExclusionAnalytics(), [get10ExclusionAnalytics]);
+  const savedHistoryMap = useMemo(() => {
+    const map = {};
+    savedSets.forEach((item) => {
+      item.games.forEach((g) => {
+        const key = g.join('-');
+        if (!map[key]) map[key] = calculateHistoricalWins(g);
+      });
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedSets, lottoCache, latestRound]);
 
   return (
     <View style={styles.fullScreenContainer}>
@@ -2077,6 +2234,7 @@ export default function App() {
               onPress={() => {
                 setWinningTopRound(latestRound);
                 setIsWinningModalVisible(true);
+                runAutoSync();
               }}
               activeOpacity={0.6}
             />
@@ -2303,7 +2461,7 @@ export default function App() {
                       latestWinningInfo.numbers,
                       latestWinningInfo.bnusNo
                     );
-                    const hist = calculateHistoricalWins(g);
+                    const hist = savedHistoryMap[g.join('-')] || calculateHistoricalWins(g);
                     const gameLabel = item.games.length === 1 ? '수동' : gameLabels[gIdx];
 
                     return (
@@ -2974,7 +3132,7 @@ export default function App() {
                   </View>
 
                   <View style={styles.miniBallsRow}>
-                    {roundData.numbers.map((n, idx) => (
+                    {(roundData.isPending ? PENDING_BALL_SLOTS : roundData.numbers).map((n, idx) => (
                       <View
                         key={`wb-${r}-${idx}`}
                         style={[
@@ -3831,13 +3989,13 @@ export default function App() {
                   제{qrResultData.round}회 공식 당첨번호 {qrResultData.winningInfo.isPending && '(미추첨/확인대기)'}
                 </Text>
                 <View style={styles.winningRefBallsRow}>
-                  {qrResultData.winningInfo.numbers.map((n, idx) => (
+                  {(qrResultData.winningInfo.isPending ? PENDING_BALL_SLOTS : qrResultData.winningInfo.numbers).map((n, idx) => (
                     <View key={`qr-win-${idx}`} style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(n) }]}>
                       <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : n}</Text>
                     </View>
                   ))}
                   <Text style={styles.refPlus}>+</Text>
-                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(latestWinningInfo.bnusNo) }]}>
+                  <View style={[styles.refBall, { backgroundColor: qrResultData.winningInfo.isPending ? '#cbd5e1' : getBallColor(qrResultData.winningInfo.bnusNo) }]}>
                     <Text style={styles.refBallText}>{qrResultData.winningInfo.isPending ? '?' : qrResultData.winningInfo.bnusNo}</Text>
                   </View>
                 </View>
