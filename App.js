@@ -15,6 +15,7 @@ import {
   Dimensions,
   ActivityIndicator,
   AppState,
+  Share,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -66,6 +67,9 @@ const INITIAL_LATEST_ROUND = Math.max(
 );
 
 const STORAGE_KEY = '@my_saved_lotto_sets';
+const PREFS_STORAGE_KEY = '@lotto_number_prefs_v1'; // 제외수·고정수 저장
+const BACKUP_APP_ID = 'anold-lotto-backup';
+const MAX_FIXED_NUMBERS = 5;
 const CACHE_STORAGE_KEY = '@lotto_cache_v4_official';
 
 const calculateDrwDate = (drwNo) => {
@@ -88,13 +92,15 @@ const getBallColor = (number) => {
 const PRIME_SET_WITH_ONE = new Set([1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43]);
 const TWIN_NUMBERS = new Set([11, 22, 33, 44]);
 
-const generateBasicLottoSet = (excludedNumbers = []) => {
+// [고정수] fixedNumbers는 항상 포함하고 나머지 자리만 무작위로 채움
+const generateBasicLottoSet = (excludedNumbers = [], fixedNumbers = []) => {
+  const fixed = fixedNumbers.filter((n) => !excludedNumbers.includes(n)).slice(0, MAX_FIXED_NUMBERS);
   const pool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
-    (n) => !excludedNumbers.includes(n)
+    (n) => !excludedNumbers.includes(n) && !fixed.includes(n)
   );
-  if (pool.length < 6) return [];
+  if (pool.length < 6 - fixed.length) return [];
 
-  const selected = new Set();
+  const selected = new Set(fixed);
   while (selected.size < 6 && pool.length > 0) {
     const idx = Math.floor(Math.random() * pool.length);
     selected.add(pool[idx]);
@@ -254,6 +260,43 @@ const isStrictStatisticallyValid = (numbers, dynamicContext) => {
 };
 
 const GAME_LABELS = ['A', 'B', 'C', 'D', 'E'];
+
+const formatNowForSave = () => {
+  const now = new Date();
+  return `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(
+    2,
+    '0'
+  )} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+};
+
+// 백업 파일에서 읽어온 보관함 데이터가 올바른지 검사하고 정리
+const sanitizeSavedSets = (list) => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((item, idx) => {
+      if (!item || !Array.isArray(item.games)) return null;
+      const games = item.games
+        .map((g) => (Array.isArray(g) ? g.map(Number) : []))
+        .filter((g) => g.length === 6 && g.every((n) => Number.isInteger(n) && n >= 1 && n <= 45) && new Set(g).size === 6)
+        .map((g) => [...g].sort((a, b) => a - b));
+      if (games.length === 0) return null;
+      const targetRound = Number(item.targetRound);
+      return {
+        id: String(item.id || `${Date.now()}_${idx}`),
+        date: String(item.date || '날짜 없음'),
+        games,
+        ...(Number.isInteger(targetRound) && targetRound > 0 ? { targetRound } : {}),
+      };
+    })
+    .filter(Boolean);
+};
+
+const sanitizeNumberList = (list, max = 45) =>
+  Array.isArray(list)
+    ? Array.from(new Set(list.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 45)))
+        .sort((a, b) => a - b)
+        .slice(0, max)
+    : [];
 // 아직 불러오지 못한 회차를 화면에 '?'로 표시하기 위한 자리표시
 const PENDING_BALL_SLOTS = [0, 0, 0, 0, 0, 0];
 
@@ -430,6 +473,13 @@ export default function App() {
   const [activeGenOption, setActiveGenOption] = useState('OPT_STRICT');
 
   const [excludedNumbers, setExcludedNumbers] = useState([]);
+  const [fixedNumbers, setFixedNumbers] = useState([]); // [신규] 고정수(반드시 포함할 번호)
+  const [ballPickMode, setBallPickMode] = useState('EXCLUDE'); // 'EXCLUDE' | 'FIXED'
+  const prefsLoadedRef = useRef(false);
+
+  // [신규] 백업·복원
+  const [isRestoreModalVisible, setIsRestoreModalVisible] = useState(false);
+  const [restoreText, setRestoreText] = useState('');
 
   const [showPatternThisWeek, setShowPatternThisWeek] = useState(false);
   const [showPattern1WeekAgo, setShowPattern1WeekAgo] = useState(false);
@@ -583,13 +633,13 @@ export default function App() {
   }, [latestRound, getLottoNumbersByRound]);
 
   const generateStrictFilteredSet = useCallback(
-    (excluded = []) => {
+    (excluded = [], fixed = []) => {
       const dynamicContext = getDynamicContextData();
 
       let attempts = 0;
       while (attempts < 20000) {
         attempts++;
-        const candidate = generateBasicLottoSet(excluded);
+        const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
 
         if (isStrictStatisticallyValid(candidate, dynamicContext)) {
@@ -600,7 +650,7 @@ export default function App() {
       attempts = 0;
       while (attempts < 5000) {
         attempts++;
-        const candidate = generateBasicLottoSet(excluded);
+        const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
 
         if (isEssentialValid(candidate)) {
@@ -611,7 +661,7 @@ export default function App() {
       attempts = 0;
       while (attempts < 2000) {
         attempts++;
-        const candidate = generateBasicLottoSet(excluded);
+        const candidate = generateBasicLottoSet(excluded, fixed);
         if (candidate.length < 6) return [];
         const sum = candidate.reduce((acc, cur) => acc + cur, 0);
         if (sum >= 100 && sum <= 180) {
@@ -619,15 +669,16 @@ export default function App() {
         }
       }
 
-      return generateBasicLottoSet(excluded);
+      return generateBasicLottoSet(excluded, fixed);
     },
     [getDynamicContextData]
   );
 
   // [고급 기능 2] 간이 휠링 시스템 (Abbreviated Wheeling System) 5게임 커버링 생성기
   const generateWheelingSystemSets = useCallback(
-    (excluded = []) => {
-      const availablePool = allNumbers.filter((n) => !excluded.includes(n));
+    (excluded = [], fixed = []) => {
+      const fixedValid = fixed.filter((n) => !excluded.includes(n));
+      const availablePool = allNumbers.filter((n) => !excluded.includes(n) && !fixedValid.includes(n));
       if (availablePool.length < 10) {
         Alert.alert('알림', '휠링 시스템을 가동하려면 최소 10개 이상의 후보수가 필요합니다.');
         return [];
@@ -644,7 +695,11 @@ export default function App() {
         [1, 2, 5, 6, 7, 9],
       ];
 
-      return wheelMasks.map((mask) => mask.map((idx) => wheelPool[idx]).sort((a, b) => a - b));
+      // 고정수가 있으면 모든 게임에 고정수를 넣고, 남은 자리만 휠링 조합으로 채움
+      const freeSlots = 6 - fixedValid.length;
+      return wheelMasks.map((mask) =>
+        [...fixedValid, ...mask.slice(0, freeSlots).map((idx) => wheelPool[idx])].sort((a, b) => a - b)
+      );
     },
     [allNumbers]
   );
@@ -960,7 +1015,9 @@ export default function App() {
       return;
     }
 
-    const merged = Array.from(new Set([...excludedNumbers, ...numbersList])).sort((a, b) => a - b);
+    const merged = Array.from(new Set([...excludedNumbers, ...numbersList]))
+      .filter((n) => !fixedNumbers.includes(n)) // 고정수는 제외하지 않음
+      .sort((a, b) => a - b);
     if (merged.length > 39) {
       Alert.alert('알림', `제외수가 ${merged.length}개로 한도(39개)를 초과하여 추가할 수 없습니다.`);
       return;
@@ -979,10 +1036,13 @@ export default function App() {
       Alert.alert('알림', '추천 제외수를 산출할 데이터가 부족합니다.');
       return;
     }
-    setExcludedNumbers(algo10_TopScores);
+    const filteredTop = algo10_TopScores.filter((n) => !fixedNumbers.includes(n));
+    setExcludedNumbers(filteredTop);
     Alert.alert(
       '10대 알고리즘 추천 완료',
-      `종합 가중치 평가를 거친 12개 정밀 제외수가 설정되었습니다.\n\n제외 번호: [${algo10_TopScores.join(', ')}]`
+      `종합 가중치 평가를 거친 ${filteredTop.length}개 정밀 제외수가 설정되었습니다.${
+        filteredTop.length < algo10_TopScores.length ? ' (고정수는 자동으로 빼고 적용)' : ''
+      }\n\n제외 번호: [${filteredTop.join(', ')}]`
     );
   };
 
@@ -1441,6 +1501,10 @@ export default function App() {
   };
 
   const toggleExcludeNumber = (num) => {
+    if (ballPickMode === 'FIXED') {
+      toggleFixedNumber(num);
+      return;
+    }
     if (excludedNumbers.includes(num)) {
       setExcludedNumbers(excludedNumbers.filter((n) => n !== num));
     } else {
@@ -1449,11 +1513,26 @@ export default function App() {
         return;
       }
       setExcludedNumbers([...excludedNumbers, num].sort((a, b) => a - b));
+      if (fixedNumbers.includes(num)) setFixedNumbers(fixedNumbers.filter((n) => n !== num));
     }
   };
 
+  // [신규] 고정수 선택/해제 (최대 5개, 제외수와 겹치면 제외수에서 빠짐)
+  const toggleFixedNumber = (num) => {
+    if (fixedNumbers.includes(num)) {
+      setFixedNumbers(fixedNumbers.filter((n) => n !== num));
+      return;
+    }
+    if (fixedNumbers.length >= MAX_FIXED_NUMBERS) {
+      Alert.alert('알림', `고정수는 최대 ${MAX_FIXED_NUMBERS}개까지 정할 수 있습니다.`);
+      return;
+    }
+    setFixedNumbers([...fixedNumbers, num].sort((a, b) => a - b));
+    if (excludedNumbers.includes(num)) setExcludedNumbers(excludedNumbers.filter((n) => n !== num));
+  };
+
   const handleInvertExcludeNumbers = () => {
-    const inverted = allNumbers.filter((n) => !excludedNumbers.includes(n));
+    const inverted = allNumbers.filter((n) => !excludedNumbers.includes(n) && !fixedNumbers.includes(n));
     if (inverted.length > 39) {
       Alert.alert('반전 불가', '최소 6개의 번호는 남아있어야 합니다.');
       return;
@@ -1486,6 +1565,7 @@ export default function App() {
       id: Date.now().toString(),
       date: `${dateStr} (수동)`,
       games: [manualSelectedNumbers],
+      targetRound: latestRound + 1, // [신규] 다음 추첨 회차용으로 저장
     };
     try {
       const updated = [newEntry, ...savedSets];
@@ -1799,7 +1879,30 @@ export default function App() {
 
     initApp();
     loadSavedSets();
+    loadNumberPrefs();
   }, []);
+
+  // [신규] 제외수·고정수를 기기에 저장 (앱을 껐다 켜도 유지)
+  const loadNumberPrefs = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(PREFS_STORAGE_KEY);
+      if (raw) {
+        const prefs = JSON.parse(raw);
+        const fixed = sanitizeNumberList(prefs.fixedNumbers, MAX_FIXED_NUMBERS);
+        setFixedNumbers(fixed);
+        setExcludedNumbers(sanitizeNumberList(prefs.excludedNumbers, 39).filter((n) => !fixed.includes(n)));
+      }
+    } catch (e) {
+      console.log('설정 로드 실패:', e);
+    } finally {
+      prefsLoadedRef.current = true;
+    }
+  };
+
+  useEffect(() => {
+    if (!prefsLoadedRef.current) return;
+    AsyncStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify({ excludedNumbers, fixedNumbers })).catch(() => {});
+  }, [excludedNumbers, fixedNumbers]);
 
   const loadSavedSets = async () => {
     try {
@@ -1881,7 +1984,7 @@ export default function App() {
         return `
           <div style="margin-bottom: 18px; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #ffffff;">
             <div style="background-color: #f1f5f9; padding: 8px 12px; font-size: 13px; font-weight: bold; color: #334155;">
-              📅 저장일시: ${item.date}
+              📅 저장일시: ${item.date} &nbsp;|&nbsp; 🎯 구매 회차: ${item.targetRound ? `제${item.targetRound}회` : '미지정'}
             </div>
             <table style="width: 100%; border-collapse: collapse; font-family: sans-serif;">
               <thead>
@@ -1941,13 +2044,13 @@ export default function App() {
       return;
     }
 
-    let csvString = '\uFEFF저장일시,게임구분,번호1,번호2,번호3,번호4,번호5,번호6,역대총당첨,1등,2등,3등,4등,5등\n';
+    let csvString = '\uFEFF저장일시,구매회차,게임구분,번호1,번호2,번호3,번호4,번호5,번호6,역대총당첨,1등,2등,3등,4등,5등\n';
     savedSets.forEach((item) => {
       item.games.forEach((g, gIdx) => {
         const label = item.games.length === 1 ? '수동' : gameLabels[gIdx];
         const hist = calculateHistoricalWins(g);
         const safeDate = item.date.replace(/,/g, '');
-        csvString += `"${safeDate}","${label}",${g[0]},${g[1]},${g[2]},${g[3]},${g[4]},${g[5]},${hist.total},${hist.r1},${hist.r2},${hist.r3},${hist.r4},${hist.r5}\n`;
+        csvString += `"${safeDate}","${item.targetRound || ''}","${label}",${g[0]},${g[1]},${g[2]},${g[3]},${g[4]},${g[5]},${hist.total},${hist.r1},${hist.r2},${hist.r3},${hist.r4},${hist.r5}\n`;
       });
     });
 
@@ -2083,13 +2186,13 @@ export default function App() {
       let title = '';
 
       if (optionType === 'NORMAL') {
-        newGames = Array.from({ length: 5 }, () => generateBasicLottoSet(excludedNumbers));
+        newGames = Array.from({ length: 5 }, () => generateBasicLottoSet(excludedNumbers, fixedNumbers));
         title = '🎲 기본 무작위 5세트 생성';
       } else if (optionType === 'OPT_STRICT') {
-        newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers));
+        newGames = Array.from({ length: 5 }, () => generateStrictFilteredSet(excludedNumbers, fixedNumbers));
         title = '📊 12대 정밀 필터링 5세트 생성';
       } else if (optionType === 'OPT_WHEELING') {
-        newGames = generateWheelingSystemSets(excludedNumbers);
+        newGames = generateWheelingSystemSets(excludedNumbers, fixedNumbers);
         title = '🎯 10수 압축 휠링 5세트 생성';
       }
 
@@ -2097,7 +2200,7 @@ export default function App() {
       setGenerationTitle(title);
       setIsGeneratedModalVisible(true);
     },
-    [excludedNumbers, generateStrictFilteredSet, generateWheelingSystemSets]
+    [excludedNumbers, fixedNumbers, generateStrictFilteredSet, generateWheelingSystemSets]
   );
 
   const handleGenerateOpposite = () => {
@@ -2113,11 +2216,12 @@ export default function App() {
       });
     });
 
+    const fixedForOpposite = fixedNumbers.filter((n) => !excludedNumbers.includes(n));
     const oppositePool = Array.from({ length: 45 }, (_, i) => i + 1).filter(
-      (n) => !savedNumbersSet.has(n) && !excludedNumbers.includes(n)
+      (n) => !savedNumbersSet.has(n) && !excludedNumbers.includes(n) && !fixedForOpposite.includes(n)
     );
 
-    if (oppositePool.length < 6) {
+    if (oppositePool.length < 6 - fixedForOpposite.length) {
       Alert.alert(
         '반대번호 생성 불가',
         `저장된 번호를 제외하고 남은 번호가 부족합니다. 최소 6개 이상이어야 합니다.`
@@ -2126,7 +2230,7 @@ export default function App() {
     }
 
     const newGames = Array.from({ length: 5 }, () => {
-      const selected = new Set();
+      const selected = new Set(fixedForOpposite); // 고정수는 반대번호에도 포함
       const tempPool = [...oppositePool];
       while (selected.size < 6 && tempPool.length > 0) {
         const rIdx = Math.floor(Math.random() * tempPool.length);
@@ -2148,15 +2252,133 @@ export default function App() {
     const dateStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(
       now.getDate()
     ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const newEntry = { id: Date.now().toString(), date: dateStr, games: games };
+    const newEntry = { id: Date.now().toString(), date: dateStr, games: games, targetRound: latestRound + 1 };
     try {
       const updated = [newEntry, ...savedSets];
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       setSavedSets(updated);
-      Alert.alert('저장 완료', '생성된 5세트 번호가 기기에 저장되었습니다.');
+      Alert.alert(
+        '저장 완료',
+        `생성된 5세트 번호가 제 ${latestRound + 1}회용으로 저장되었습니다.\n(보관함에서 회차 표시를 누르면 바꿀 수 있어요)`
+      );
     } catch (e) {
       Alert.alert('저장 실패', '번호를 저장하는 중 문제가 발생했습니다.');
     }
+  };
+
+  // [신규] 저장 묶음의 구매 회차 바꾸기
+  const updateSetTargetRound = async (itemId, round) => {
+    const updated = savedSets.map((item) => (item.id === itemId ? { ...item, targetRound: round } : item));
+    setSavedSets(updated);
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {
+      Alert.alert('저장 실패', '구매 회차를 바꾸는 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleChangeTargetRound = (item) => {
+    const current = item.targetRound;
+    Alert.alert(
+      '구매 회차 지정',
+      `이 묶음을 어느 회차 결과와 대조할까요?\n현재: ${current ? `제 ${current}회` : '지정 안 됨 (항상 최신 회차와 대조)'}`,
+      [
+        { text: `제 ${latestRound}회 (이미 추첨됨)`, onPress: () => updateSetTargetRound(item.id, latestRound) },
+        { text: `제 ${latestRound + 1}회 (이번 주)`, onPress: () => updateSetTargetRound(item.id, latestRound + 1) },
+        { text: `제 ${latestRound + 2}회 (다음 주)`, onPress: () => updateSetTargetRound(item.id, latestRound + 2) },
+        { text: '취소', style: 'cancel' },
+      ]
+    );
+  };
+
+  // [신규] 백업: 보관함·제외수·고정수를 글자로 만들어 카톡/메모 등에 보내기
+  const handleBackupData = async () => {
+    if (savedSets.length === 0 && excludedNumbers.length === 0 && fixedNumbers.length === 0) {
+      Alert.alert('알림', '백업할 데이터가 없습니다.');
+      return;
+    }
+    const payload = {
+      app: BACKUP_APP_ID,
+      version: 1,
+      exportedAt: formatNowForSave(),
+      savedSets,
+      excludedNumbers,
+      fixedNumbers,
+    };
+    try {
+      await Share.share({
+        title: '로또 앱 백업',
+        message: JSON.stringify(payload),
+      });
+    } catch (e) {
+      Alert.alert('백업 오류', '백업 내용을 보내는 중 문제가 발생했습니다.');
+    }
+  };
+
+  const applyRestore = async (data, mode) => {
+    try {
+      const incoming = sanitizeSavedSets(data.savedSets);
+      let nextSets;
+      if (mode === 'REPLACE') {
+        nextSets = incoming;
+      } else {
+        const existingIds = new Set(savedSets.map((s) => s.id));
+        const existingGames = new Set(savedSets.flatMap((s) => s.games.map((g) => g.join('-'))));
+        const additions = incoming
+          .map((item) => ({ ...item, games: item.games.filter((g) => !existingGames.has(g.join('-'))) }))
+          .filter((item) => item.games.length > 0)
+          .map((item) => (existingIds.has(item.id) ? { ...item, id: `${item.id}_r${Date.now()}` } : item));
+        nextSets = [...additions, ...savedSets];
+      }
+
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(nextSets));
+      setSavedSets(nextSets);
+
+      const fixed = sanitizeNumberList(data.fixedNumbers, MAX_FIXED_NUMBERS);
+      const excluded = sanitizeNumberList(data.excludedNumbers, 39).filter((n) => !fixed.includes(n));
+      if (mode === 'REPLACE' || fixed.length > 0 || excluded.length > 0) {
+        setFixedNumbers(fixed);
+        setExcludedNumbers(excluded);
+      }
+
+      const gameCount = nextSets.reduce((sum, s) => sum + s.games.length, 0);
+      setRestoreText('');
+      setIsRestoreModalVisible(false);
+      Alert.alert('복원 완료', `보관함에 총 ${gameCount}게임이 있습니다.`);
+    } catch (e) {
+      Alert.alert('복원 실패', '데이터를 저장하는 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleRestoreData = () => {
+    const text = restoreText.trim();
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end <= start) {
+      Alert.alert('복원 오류', '백업 내용을 찾을 수 없습니다. 백업할 때 보낸 글을 통째로 붙여넣어 주세요.');
+      return;
+    }
+    let data;
+    try {
+      data = JSON.parse(text.slice(start, end + 1));
+    } catch (e) {
+      Alert.alert('복원 오류', '백업 내용이 잘렸거나 바뀌었습니다. 처음부터 끝까지 다시 복사해 주세요.');
+      return;
+    }
+    if (!data || data.app !== BACKUP_APP_ID) {
+      Alert.alert('복원 오류', '이 앱의 백업 내용이 아닙니다.');
+      return;
+    }
+    const incomingCount = sanitizeSavedSets(data.savedSets).reduce((sum, s) => sum + s.games.length, 0);
+    Alert.alert(
+      '복원 방법 선택',
+      `백업 날짜: ${data.exportedAt || '알 수 없음'}\n백업 속 번호: ${incomingCount}게임\n\n지금 보관함과 어떻게 할까요?`,
+      [
+        { text: '취소', style: 'cancel' },
+        { text: '합치기', onPress: () => applyRestore(data, 'MERGE') },
+        { text: '덮어쓰기', style: 'destructive', onPress: () => applyRestore(data, 'REPLACE') },
+      ]
+    );
   };
 
   const handleDeleteSingleGame = (itemId, gameIdx) => {
@@ -2310,6 +2532,11 @@ export default function App() {
                     ? '12대 필터 + 끝수다양성 + 직전이웃수 결합'
                     : '제외수 반영 무작위 6개 추출'}
                 </Text>
+                {fixedNumbers.length > 0 && (
+                  <Text style={[styles.modalSubtitle, { color: '#059669', fontWeight: '800' }]}>
+                    📌 고정수 포함: {fixedNumbers.join(', ')}
+                  </Text>
+                )}
               </View>
               <TouchableOpacity onPress={() => setIsGeneratedModalVisible(false)} style={styles.closeBtn}>
                 <Text style={styles.closeBtnText}>✕</Text>
@@ -2416,8 +2643,24 @@ export default function App() {
           </View>
 
           <Text style={[styles.modalSubtitle, { marginHorizontal: 16, marginBottom: 10 }]}>
-            최신 제{latestRound}회 결과 대조 및 2수 궁합(케미) 최적화
+            각 묶음의 구매 회차 결과로 대조 (🎯 회차 표시를 누르면 변경)
           </Text>
+
+          <View style={[styles.exportButtonGroup, { marginHorizontal: 16 }]}>
+            <TouchableOpacity style={styles.backupBtn} onPress={handleBackupData} activeOpacity={0.8}>
+              <Text style={styles.backupBtnText}>📤 백업 보내기</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.restoreBtn}
+              onPress={() => {
+                setRestoreText('');
+                setIsRestoreModalVisible(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.restoreBtnText}>📥 백업 복원</Text>
+            </TouchableOpacity>
+          </View>
 
           <View style={[styles.exportButtonGroup, { marginHorizontal: 16 }]}>
             <TouchableOpacity style={styles.exportPdfBtn} onPress={handleExportPDF} activeOpacity={0.8}>
@@ -2449,10 +2692,30 @@ export default function App() {
                 <Text style={styles.emptySubText}>번호를 생성한 후 '기기에 저장'을 눌러보세요!</Text>
               </View>
             ) : (
-              savedSets.map((item) => (
+              savedSets.map((item) => {
+                // [신규] 묶음마다 구매 회차 결과로 대조 (회차 미지정이면 최신 회차)
+                const compareRound = item.targetRound || latestRound;
+                const compareInfo = getLottoNumbersByRound(compareRound);
+                const compareNumbers = compareInfo.isPending ? [] : compareInfo.numbers;
+                const compareBonus = compareInfo.isPending ? null : compareInfo.bnusNo;
+                return (
                 <View key={item.id} style={styles.savedCard}>
                   <View style={styles.savedCardHeader}>
-                    <Text style={styles.savedDate}>📅 {item.date}</Text>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.savedDate}>📅 {item.date}</Text>
+                      <TouchableOpacity
+                        style={[styles.targetRoundBadge, !item.targetRound && styles.targetRoundBadgeUnset]}
+                        onPress={() => handleChangeTargetRound(item)}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.targetRoundBadgeText, !item.targetRound && { color: '#b45309' }]}>
+                          {item.targetRound
+                            ? `🎯 제 ${item.targetRound}회용${compareInfo.isPending ? ' · 추첨 전' : ''} ✎`
+                            : `🎯 회차 미지정 (최신 제${latestRound}회와 대조) ✎`}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                     <TouchableOpacity
                       onPress={() => {
                         Alert.alert('세트 삭제', '이 묶음의 번호를 모두 삭제하시겠습니까?', [
@@ -2475,11 +2738,9 @@ export default function App() {
                   </View>
 
                   {item.games.map((g, gIdx) => {
-                    const lastResult = checkSingleRoundResult(
-                      g,
-                      latestWinningInfo.numbers,
-                      latestWinningInfo.bnusNo
-                    );
+                    const lastResult = compareInfo.isPending
+                      ? { rank: `⏳ 제${compareRound}회 추첨 대기`, grade: 0, color: '#b45309', bg: '#fef3c7' }
+                      : checkSingleRoundResult(g, compareNumbers, compareBonus);
                     const hist = savedHistoryMap[g.join('-')] || calculateHistoricalWins(g);
                     const gameLabel = item.games.length === 1 ? '수동' : gameLabels[gIdx];
 
@@ -2543,8 +2804,8 @@ export default function App() {
 
                         <View style={styles.savedBallsRow}>
                           {g.map((n) => {
-                            const isMatched = latestWinningInfo.numbers.includes(n);
-                            const isBonusMatched = n === latestWinningInfo.bnusNo;
+                            const isMatched = compareNumbers.includes(n);
+                            const isBonusMatched = compareBonus !== null && n === compareBonus;
                             return (
                               <View
                                 key={`s-ball-${n}`}
@@ -2576,7 +2837,8 @@ export default function App() {
                     );
                   })}
                 </View>
-              ))
+                );
+              })
             )}
           </ScrollView>
 
@@ -2610,7 +2872,8 @@ export default function App() {
 
             <View style={styles.excludeCountBar}>
               <Text style={styles.excludeCountText}>
-                현재 설정된 제외수: <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (권장: 10~14개)
+                제외수 <Text style={styles.excludeCountHighlight}>{excludedNumbers.length}개</Text> (권장 10~14) · 고정수{' '}
+                <Text style={[styles.excludeCountHighlight, { color: '#059669' }]}>{fixedNumbers.length}개</Text> (최대 {MAX_FIXED_NUMBERS})
               </Text>
             </View>
 
@@ -2724,9 +2987,38 @@ export default function App() {
                 </View>
               </View>
 
+              {/* [신규] 번호 선택 모드: 제외수 / 고정수 */}
+              <View style={styles.pickModeRow}>
+                <TouchableOpacity
+                  style={[styles.pickModeBtn, ballPickMode === 'EXCLUDE' && styles.pickModeBtnExcludeActive]}
+                  onPress={() => setBallPickMode('EXCLUDE')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.pickModeBtnText, ballPickMode === 'EXCLUDE' && styles.pickModeBtnTextActive]}>
+                    🚫 제외수 고르기
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.pickModeBtn, ballPickMode === 'FIXED' && styles.pickModeBtnFixedActive]}
+                  onPress={() => setBallPickMode('FIXED')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.pickModeBtnText, ballPickMode === 'FIXED' && styles.pickModeBtnTextActive]}>
+                    📌 고정수 고르기
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.pickModeGuide}>
+                {ballPickMode === 'FIXED'
+                  ? `고정수는 생성되는 모든 게임에 반드시 들어갑니다. (최대 ${MAX_FIXED_NUMBERS}개)`
+                  : '제외수는 번호 생성에서 빠집니다.'}
+                {fixedNumbers.length > 0 ? `  현재 고정수: ${fixedNumbers.join(', ')}` : ''}
+              </Text>
+
               <View style={styles.excludeBallWrapper}>
                 {allNumbers.map((num) => {
                   const isExcluded = excludedNumbers.includes(num);
+                  const isFixed = fixedNumbers.includes(num);
 
                   return (
                     <TouchableOpacity
@@ -2735,6 +3027,7 @@ export default function App() {
                         styles.standardLottoBall,
                         { backgroundColor: getBallColor(num) },
                         isExcluded && styles.standardLottoBallExcluded,
+                        isFixed && styles.fixedLottoBall,
                       ]}
                       onPress={() => toggleExcludeNumber(num)}
                       activeOpacity={0.7}
@@ -2751,6 +3044,11 @@ export default function App() {
                       {isExcluded && (
                         <View style={styles.ballStrikeBadge}>
                           <Text style={styles.ballStrikeX}>✕</Text>
+                        </View>
+                      )}
+                      {isFixed && (
+                        <View style={styles.fixedBadge}>
+                          <Text style={styles.fixedBadgeText}>📌</Text>
                         </View>
                       )}
                     </TouchableOpacity>
@@ -2778,10 +3076,13 @@ export default function App() {
 
               <TouchableOpacity
                 style={styles.excludeResetBlueBtn}
-                onPress={() => setExcludedNumbers([])}
+                onPress={() => {
+                  if (ballPickMode === 'FIXED') setFixedNumbers([]);
+                  else setExcludedNumbers([]);
+                }}
                 activeOpacity={0.8}
               >
-                <Text style={styles.btnTextWhiteBold}>전체해제</Text>
+                <Text style={styles.btnTextWhiteBold}>{ballPickMode === 'FIXED' ? '고정 해제' : '전체해제'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3926,6 +4227,65 @@ export default function App() {
         </View>
       </Modal>
 
+      {/* [신규 모달] 백업 복원 */}
+      <Modal
+        visible={isRestoreModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsRestoreModalVisible(false)}
+      >
+        <View style={styles.centerModalOverlay}>
+          <View style={styles.excludePopupBox}>
+            <View style={[styles.excludeHeaderBox, { backgroundColor: '#0f766e' }]}>
+              <Text style={[styles.excludeHeaderTitle, { color: '#ffffff' }]}>📥 백업 복원</Text>
+              <TouchableOpacity
+                onPress={() => setIsRestoreModalVisible(false)}
+                style={styles.excludeCloseTouch}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text style={[styles.excludeCloseX, { color: '#ffffff' }]}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ padding: 14 }}>
+              <Text style={styles.restoreGuideText}>
+                1. 카톡·메모 등에 보관해 둔 백업 글을 길게 눌러 전체 복사해요.{'\n'}
+                2. 아래 칸을 길게 눌러 붙여넣기 해요.{'\n'}
+                3. [복원하기]를 누르고 합치기 / 덮어쓰기를 골라요.
+              </Text>
+              <TextInput
+                style={styles.restoreInput}
+                value={restoreText}
+                onChangeText={setRestoreText}
+                multiline
+                placeholder="여기에 백업 글을 붙여넣으세요"
+                textAlignVertical="top"
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              <Text style={styles.restoreCountText}>붙여넣은 글자 수: {restoreText.length.toLocaleString()}자</Text>
+            </View>
+
+            <View style={styles.excludePopupBtnRow}>
+              <TouchableOpacity
+                style={[styles.excludeConfirmOrangeBtn, { backgroundColor: '#0f766e' }]}
+                onPress={handleRestoreData}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnTextWhiteBold}>복원하기</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.excludeResetBlueBtn, { backgroundColor: '#64748b' }]}
+                onPress={() => setIsRestoreModalVisible(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnTextWhiteBold}>닫기</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* [모달 8] QR 코드 스캐너 모달 (세로 고정) */}
       <Modal
         visible={isCameraModalVisible}
@@ -4088,6 +4448,7 @@ export default function App() {
                     id: Date.now().toString(),
                     date: dateStr,
                     games: qrResultData.games,
+                    targetRound: qrResultData.round, // QR 복권의 실제 회차
                   };
 
                   const updated = [newEntry, ...savedSets];
@@ -5768,6 +6129,121 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#0f172a',
+  },
+  // [신규] 구매 회차 배지
+  targetRoundBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  targetRoundBadgeUnset: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+  },
+  targetRoundBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#047857',
+  },
+  // [신규] 백업·복원
+  backupBtn: {
+    flex: 1,
+    backgroundColor: '#0f766e',
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  backupBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '800' },
+  restoreBtn: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#0f766e',
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  restoreBtnText: { color: '#0f766e', fontSize: 13, fontWeight: '800' },
+  restoreGuideText: {
+    fontSize: 12,
+    lineHeight: 19,
+    color: '#334155',
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  restoreInput: {
+    height: 160,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    backgroundColor: '#f8fafc',
+    padding: 10,
+    fontSize: 11,
+  },
+  restoreCountText: {
+    fontSize: 10.5,
+    color: '#64748b',
+    marginTop: 6,
+    textAlign: 'right',
+  },
+  // [신규] 고정수 선택
+  pickModeRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginHorizontal: 10,
+    marginTop: 10,
+  },
+  pickModeBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+  },
+  pickModeBtnExcludeActive: {
+    backgroundColor: '#dc2626',
+    borderColor: '#dc2626',
+  },
+  pickModeBtnFixedActive: {
+    backgroundColor: '#059669',
+    borderColor: '#059669',
+  },
+  pickModeBtnText: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#475569',
+  },
+  pickModeBtnTextActive: {
+    color: '#ffffff',
+  },
+  pickModeGuide: {
+    fontSize: 10.5,
+    color: '#475569',
+    fontWeight: '700',
+    marginHorizontal: 12,
+    marginTop: 6,
+  },
+  fixedLottoBall: {
+    borderWidth: 3,
+    borderColor: '#059669',
+    transform: [{ scale: 1.08 }],
+  },
+  fixedBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+  },
+  fixedBadgeText: {
+    fontSize: 13,
   },
   winning15Scroll: {
     flex: 1,
